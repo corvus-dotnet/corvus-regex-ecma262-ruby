@@ -1,0 +1,5 @@
+target/
+.git/
+tmp/
+pkg/
+lib/corvus_regex_ecma262/*.so

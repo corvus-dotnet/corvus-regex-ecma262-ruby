@@ -1,0 +1,290 @@
+# frozen_string_literal: true
+
+# ECMA-262 (JavaScript) regular expressions for Ruby, with the grammar and the answers of RegExp, every flag, backed by
+# the corvus-regex-ecma262 Rust crate.
+#
+#   date = CorvusRegexEcma262::Regex.new('(?<year>\d{4})-(?<month>\d{2})', "gu")
+#   date.match?("due 2026-10")                       # => true
+#   date.match("due 2026-10")[:year]                 # => "2026"
+#   date.each_match("2026-10, 2027-01").map(&:to_s)  # => ["2026-10", "2027-01"]
+#   date.replace("2026-10, 2027-01", "$<month>/$1")  # => "10/2026, 01/2027"
+#
+# A String is matched as it is held: UTF-8 (or US-ASCII, or binary holding UTF-8) as UTF-8, with positions in
+# characters as Ruby counts them and byte positions beside them; UTF-16LE as UTF-16, with positions in code units.
+# Without the u or v flag a pattern is matched by UTF-16 code unit, so a match can take half of a character beyond the
+# Basic Multilingual Plane: over UTF-8 its text holds that half as U+FFFD, and its start and end in characters are the
+# whole character's.
+require_relative "corvus_regex_ecma262/version"
+
+begin
+  RUBY_VERSION =~ /(\d+\.\d+)/
+  require_relative "corvus_regex_ecma262/#{Regexp.last_match(1)}/corvus_regex_ecma262"
+rescue LoadError
+  require_relative "corvus_regex_ecma262/corvus_regex_ecma262"
+end
+
+module CorvusRegexEcma262
+  UTF16LE = Encoding::UTF_16LE
+
+  # A compiled ECMA-262 regular expression, as new RegExp(pattern, flags) compiles it. It is immutable, and may be
+  # used from any number of threads.
+  class Regex
+    attr_reader :names
+
+    # Compiles a pattern with the flags new RegExp(pattern, flags) takes, any of dgimsuvy. Raises InvalidPatternError,
+    # InvalidFlagsError or PatternTooLargeError (each an Error).
+    def initialize(pattern, flags = "")
+      @native = Native::Regex.new(CorvusRegexEcma262.utf8(pattern), flags.to_s)
+      @names = @native.names.freeze
+      freeze
+    end
+
+    # Whether a pattern is valid with the flags, without compiling it.
+    def self.valid?(pattern, flags = "")
+      Native::Regex.valid?(CorvusRegexEcma262.utf8(pattern), flags.to_s)
+    end
+
+    # The pattern as it was given, as UTF-8.
+    def source = @native.source
+
+    # The flags as RegExp.prototype.flags writes them, in the order dgimsuvy.
+    def flags = @native.flags
+
+    # The number of capturing groups.
+    def group_count = @native.group_count
+
+    # Whether the pattern matches at or after pos (at pos alone with the y flag), as RegExp.prototype.test with
+    # lastIndex set to pos. With timeout: (seconds), a match that reaches it raises MatchLimitError.
+    def match?(string, pos = 0, timeout: nil)
+      @native.test(string, CorvusRegexEcma262.unit_of(string, pos), timeout&.to_f)
+    end
+
+    # The first match at or after pos, as exec finds it with lastIndex set to pos: a Match, or nil. With a block, the
+    # block's result for the match, or nil. With timeout: (seconds), a match that reaches it raises MatchLimitError.
+    def match(string, pos = 0, timeout: nil)
+      groups = @native.exec(string, CorvusRegexEcma262.unit_of(string, pos), timeout&.to_f)
+      return nil unless groups
+
+      m = Match.new(self, string, groups, Positions.new(string))
+      block_given? ? yield(m) : m
+    end
+
+    # Every match of a global search of the string, as matchAll makes one: yields each Match, or returns an
+    # Enumerator. After an empty match the search goes on one character later, and with the y flag each match must
+    # start where the one before ended.
+    def each_match(string)
+      return enum_for(:each_match, string) unless block_given?
+
+      positions = Positions.new(string)
+      @native.each(string) { |groups| yield Match.new(self, string, groups, positions) }
+      self
+    end
+
+    # The number of matches of a global search, without making them.
+    def match_count(string) = @native.count(string)
+
+    # The string with the first match replaced, or every match with the g flag, as String.prototype.replace replaces
+    # them. The replacement is a template ($& the match, $` the text before it, $' the text after it, $1 to $99 a
+    # group, $<name> a named group, $$ a dollar sign), or the block's result for each Match.
+    def replace(string, replacement = nil, &block)
+      substitute(string, replacement, @native.global?, &block)
+    end
+
+    # The string with every match replaced, whether or not the g flag is set (String.prototype.replaceAll).
+    def replace_all(string, replacement = nil, &block)
+      substitute(string, replacement, true, &block)
+    end
+
+    # The string split around the matches, as String.prototype.split(separator, limit) splits it: what each group
+    # captured is spliced in after the piece before it (nil for a group that did not take part), an empty match at
+    # the start or the end splits nothing, and there are at most limit pieces.
+    def split(string, limit = nil)
+      @native.split(string, limit).map { |piece| piece&.force_encoding(CorvusRegexEcma262.result_encoding(string)) }
+    end
+
+    def inspect = "#<CorvusRegexEcma262::Regex /#{source}/#{flags}>"
+    alias to_s inspect
+
+    def ==(other) = other.is_a?(Regex) && other.source == source && other.flags == flags
+    alias eql? ==
+    def hash = [source, flags].hash
+
+    private
+
+    def substitute(string, replacement, all)
+      unless block_given?
+        raise ArgumentError, "a replacement or a block" if replacement.nil?
+
+        template = string.encoding == UTF16LE ? replacement.encode(UTF16LE) : CorvusRegexEcma262.utf8(replacement)
+        return @native.replace(string, template, all).force_encoding(CorvusRegexEcma262.result_encoding(string))
+      end
+      raise ArgumentError, "a replacement or a block, not both" unless replacement.nil?
+
+      out = +""
+      out.force_encoding(CorvusRegexEcma262.result_encoding(string))
+      last = 0
+      unit = string.encoding == UTF16LE ? 2 : 1
+      positions = Positions.new(string)
+      @native.each(string) do |groups|
+        m = Match.new(self, string, groups, positions)
+        out << string.byteslice(last * unit, (groups[0] - last) * unit) << yield(m).to_s
+        last = groups[1]
+        break unless all
+      end
+      out << string.byteslice(last * unit, string.bytesize - last * unit)
+    end
+  end
+
+  # Where a match and its groups are, read as a MatchData is: by number, by name (String or Symbol), with begin, end
+  # and offset in characters (in code units for a UTF-16LE string), and byte_begin, byte_end and byteoffset in bytes.
+  class Match
+    attr_reader :string, :regexp
+
+    def initialize(regexp, string, groups, positions)
+      @regexp = regexp
+      @string = string
+      @groups = groups
+      @positions = positions
+    end
+
+    # The number of groups, the whole match among them.
+    def size = @regexp.group_count + 1
+    alias length size
+
+    def names = @regexp.names
+
+    # The text of a group, by number, name or Symbol: nil when it did not take part.
+    def [](group)
+      s, e = span(group)
+      return nil if s.negative?
+
+      text(s, e)
+    end
+
+    # The start of the group in characters (code units for UTF-16LE), or nil when it did not take part.
+    def begin(group = 0)
+      s, = span(group)
+      s.negative? ? nil : @positions.char(s, false)
+    end
+
+    # The end of the group in characters (code units for UTF-16LE), or nil when it did not take part.
+    def end(group = 0)
+      _, e = span(group)
+      e.negative? ? nil : @positions.char(e, true)
+    end
+
+    # [begin, end] of the group, or [nil, nil] when it did not take part.
+    def offset(group = 0) = [self.begin(group), self.end(group)]
+
+    def byte_begin(group = 0)
+      s, = span(group)
+      s.negative? ? nil : s * unit
+    end
+
+    def byte_end(group = 0)
+      _, e = span(group)
+      e.negative? ? nil : e * unit
+    end
+
+    def byteoffset(group = 0) = [byte_begin(group), byte_end(group)]
+
+    # The text of every capturing group, nil for one that did not take part.
+    def captures = (1...size).map { |g| self[g] }
+
+    # The text of each name's group.
+    def named_captures = names.to_h { |n| [n, self[n]] }
+
+    def to_a = (0...size).map { |g| self[g] }
+    def values_at(*groups) = groups.map { |g| self[g] }
+    def to_s = self[0]
+    def pre_match = text(0, @groups[0])
+    def post_match = @string.byteslice(@groups[1] * unit, @string.bytesize - (@groups[1] * unit))
+
+    def inspect = "#<CorvusRegexEcma262::Match #{to_s.inspect} #{offset.inspect}>"
+
+    private
+
+    def unit = @string.encoding == UTF16LE ? 2 : 1
+
+    # [start, end] of a group in engine positions (-1 for one that did not take part).
+    def span(group)
+      i = case group
+          when Integer
+            raise IndexError, "index #{group} out of matches" if group.negative? || group >= size
+
+            group
+          when String, Symbol
+            k = names.index(group.to_s)
+            raise IndexError, "undefined group name reference: #{group}" unless k
+
+            size + k
+          else
+            raise TypeError, "a group is an Integer, a String or a Symbol"
+          end
+      [@groups[2 * i], @groups[(2 * i) + 1]]
+    end
+
+    def text(s, e)
+      piece = @string.byteslice(s * unit, (e - s) * unit)
+      # A half of a character (without u or v, over UTF-8) is no UTF-8: written as U+FFFD, as the crate writes it.
+      piece.valid_encoding? ? piece : piece.scrub("�")
+    end
+  end
+
+  # Byte positions to character positions, going on from where it was last asked, since a search asks in order.
+  class Positions
+    def initialize(string)
+      @string = string
+      @identity = string.encoding == UTF16LE || string.ascii_only?
+      @byte = 0
+      @char = 0
+    end
+
+    # The character index of a byte position; a position inside a character (between the halves of one beyond the
+    # Basic Multilingual Plane) is its start, or (for an end) past it.
+    def char(byte, at_end)
+      return byte if @identity
+
+      @byte = @char = 0 if byte < @byte
+      inside = byte < @string.bytesize && (@string.getbyte(byte) & 0xC0) == 0x80
+      target = byte
+      target -= 1 while inside && target.positive? && (@string.getbyte(target) & 0xC0) == 0x80
+      @char += @string.byteslice(@byte, target - @byte).length
+      @byte = target
+      inside && at_end ? @char + 1 : @char
+    end
+  end
+
+  class << self
+    # Compiles a pattern: Regex.new(pattern, flags).
+    def compile(pattern, flags = "") = Regex.new(pattern, flags)
+
+    # Whether a pattern is valid with the flags, without compiling it.
+    def valid?(pattern, flags = "") = Regex.valid?(pattern, flags)
+
+    # The version of the crate the extension was built with.
+    def crate_version = Native.crate_version
+
+    # @api private
+    def utf8(s)
+      s = s.to_s
+      return s if s.encoding == Encoding::UTF_8 || (s.encoding == Encoding::US_ASCII && s.ascii_only?)
+
+      # A lone surrogate (in a UTF-16 pattern) is read as U+FFFD, as the crate's UTF-8 patterns have none.
+      s.encode(Encoding::UTF_8, invalid: :replace, undef: :replace, replace: "�")
+    end
+
+    # @api private
+    def result_encoding(string) = string.encoding == UTF16LE ? UTF16LE : Encoding::UTF_8
+
+    # @api private: the engine position of a character position.
+    def unit_of(string, pos)
+      raise ArgumentError, "pos must not be negative" if pos.negative?
+      return pos if string.encoding == UTF16LE || string.ascii_only? || pos.zero?
+      # Past the end, as lastIndex past a string's length: no match.
+      return string.bytesize + 1 if pos > string.length
+
+      string[0, pos].bytesize
+    end
+  end
+end

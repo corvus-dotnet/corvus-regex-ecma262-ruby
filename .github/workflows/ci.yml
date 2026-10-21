@@ -1,0 +1,43 @@
+# Format and clippy (warnings denied) and the versions, then the gems: the source gem and the native gems for every
+# platform, each installed and tested on its platform with the oldest and newest Ruby, with the ECMA-262 test data
+# through it (rubygems-build.yml).
+name: ci
+on:
+  push:
+    branches:
+    - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Format, clippy and versions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1.327.0
+        with:
+          ruby-version: '3.3'
+      - name: Install the toolchain of rust-toolchain.toml
+        run: rustup show
+      - name: Format and clippy
+        run: |
+          cargo fmt --check
+          cargo clippy -j 4 --all-targets -- -D warnings
+      - name: The versions agree
+        # version.rb and the extension's Cargo.toml name one version.
+        run: |
+          rb=$(ruby -Ilib -rcorvus_regex_ecma262/version -e 'print CorvusRegexEcma262::VERSION')
+          rs=$(sed -n 's/^version = "\(.*\)"$/\1/p' ext/corvus_regex_ecma262/Cargo.toml | head -n 1)
+          echo "version.rb $rb, Cargo.toml $rs"
+          [ "$rb" = "$rs" ]
+
+  gems:
+    name: Gems
+    uses: ./.github/workflows/rubygems-build.yml
