@@ -182,4 +182,30 @@ class TestRegex < Minitest::Test
     counts = Array.new(4) { Thread.new { (1..20).sum { r.each_match(text).count } } }.map(&:value)
     assert_equal [40_000] * 4, counts
   end
+
+  def test_nested_classes_on_a_small_stack
+    # With v a class holds classes, each a level of reading: on a thread of 256 KB the deepest nesting allowed is
+    # read, compiled and matched, and deeper is refused as too large, rather than overflowing the stack, which ends
+    # the process (as with the crate up to 0.1.1). Ruby sets the stack of its threads when the process starts, so a
+    # child process is started with a small one.
+    script = <<~RUBY
+      require "corvus_regex_ecma262"
+      r = CorvusRegexEcma262
+      nest = ->(depth) { ("[" * depth) + "a" + ("]" * depth) }
+      worker = Thread.new do
+        refused = [nest.(1001), "[" * 200_000].map do |pattern|
+          r.compile(pattern, "v")
+          :compiled
+        rescue r::PatternTooLargeError
+          :too_large
+        end
+        [r.compile(nest.(1000), "v").match?("a"), refused]
+      end
+      p worker.value
+    RUBY
+    env = { "RUBY_THREAD_MACHINE_STACK_SIZE" => (256 * 1024).to_s, "RUBYLIB" => $LOAD_PATH.join(File::PATH_SEPARATOR) }
+    out = IO.popen(env, [RbConfig.ruby, "-e", script], &:read)
+    assert $?.success?, "the child ended with #{$?}"
+    assert_equal "[true, [:too_large, :too_large]]", out.strip
+  end
 end
