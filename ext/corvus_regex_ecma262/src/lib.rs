@@ -186,21 +186,27 @@ impl NativeRegex {
     }
 }
 
-/// Locks a string against change while Ruby code runs inside a call that has its text borrowed.
-struct Locked(Value);
+/// Locks a string against change while Ruby code runs inside a call that has its text borrowed. A frozen string
+/// cannot change, and is not locked (Ruby 4.0 refuses to lock one).
+struct Locked(Option<Value>);
 
 impl Locked {
     fn new(s: RString) -> Locked {
+        if s.is_frozen() {
+            return Locked(None);
+        }
         // SAFETY: rb_str_locktmp raises if the string is already locked, which a nested call does not do here.
         unsafe { rb_sys::rb_str_locktmp(s.as_raw()) };
-        Locked(s.as_value())
+        Locked(Some(s.as_value()))
     }
 }
 
 impl Drop for Locked {
     fn drop(&mut self) {
-        // SAFETY: the string was locked by new.
-        unsafe { rb_sys::rb_str_unlocktmp(self.0.as_raw()) };
+        if let Some(s) = self.0 {
+            // SAFETY: the string was locked by new.
+            unsafe { rb_sys::rb_str_unlocktmp(s.as_raw()) };
+        }
     }
 }
 

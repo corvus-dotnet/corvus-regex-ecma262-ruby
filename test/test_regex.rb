@@ -123,9 +123,19 @@ class TestRegex < Minitest::Test
     assert_equal 0, R.compile("a", "gy").each_match("baa").count
     # Positions over non-ASCII text, in order.
     assert_equal [[0, 1], [4, 5], [8, 9]], R.compile("é", "g").each_match("é a é b é").map(&:offset)
-    # The string cannot change while a search walks it.
+    # A frozen string is searched as it is (Ruby 4.0 refuses to lock one against change, as a search does a string
+    # that is not frozen).
+    assert_equal 3, R.compile("a", "g").each_match("aaa".dup.freeze).count
+    assert_equal "bbb", R.compile("a", "g").replace("aaa".dup.freeze) { "b" }
+    # A search walks the string as it was when the search began, whatever the block does to it, and searches of
+    # one string may run inside one another.
     s = +"aaa"
-    assert_raises(RuntimeError) { R.compile("a", "g").each_match(s) { s << "b" } }
+    seen = []
+    R.compile("a", "g").each_match(s) { |m| seen << m.begin(0); s << "a" }
+    assert_equal [0, 1, 2], seen
+    nested = 0
+    R.compile("a", "g").each_match(s) { R.compile("a", "g").each_match(s) { nested += 1 } }
+    assert_equal 36, nested
   end
 
   def test_replace

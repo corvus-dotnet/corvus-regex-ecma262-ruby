@@ -75,6 +75,7 @@ module CorvusRegexEcma262
     def each_match(string)
       return enum_for(:each_match, string) unless block_given?
 
+      string = CorvusRegexEcma262.snapshot(string)
       positions = Positions.new(string)
       @native.each(string) { |groups| yield Match.new(self, string, groups, positions) }
       self
@@ -120,6 +121,7 @@ module CorvusRegexEcma262
       end
       raise ArgumentError, "a replacement or a block, not both" unless replacement.nil?
 
+      string = CorvusRegexEcma262.snapshot(string)
       out = +""
       out.force_encoding(CorvusRegexEcma262.result_encoding(string))
       last = 0
@@ -273,6 +275,11 @@ module CorvusRegexEcma262
       # A lone surrogate (in a UTF-16 pattern) is read as U+FFFD, as the crate's UTF-8 patterns have none.
       s.encode(Encoding::UTF_8, invalid: :replace, undef: :replace, replace: "�")
     end
+
+    # @api private: the string as a search that runs a block walks it, frozen, so that it cannot change under the
+    # search and any number of searches may walk it at once. A string that is not frozen is copied as Ruby copies a
+    # String, sharing its bytes until either is changed.
+    def snapshot(string) = string.frozen? ? string : string.dup.freeze
 
     # @api private
     def result_encoding(string) = string.encoding == UTF16LE ? UTF16LE : Encoding::UTF_8
