@@ -10,20 +10,24 @@
 # answers), the record's flags alone (the legacy answers) and, in the file that has them, the flags with v added (the
 # unicode_sets answers). A text is matched as a UTF-16LE string (positions in code units, as the data gives them) and
 # as a UTF-8 string (positions in bytes); a text with a lone surrogate has no UTF-8 form and is matched as UTF-16LE
-# alone. Records marked v8_deviation are left out. Any difference from V8 is a wrong answer; a refusal of a valid
-# pattern, an acceptance of an invalid one, and a match that reaches its limit are counted apart and listed too.
+# alone. Records and tests marked v8_deviation are left out, but for those marked unicode-version, where V8 has the
+# Unicode of 16 and test262 that of 17: the gem has Unicode 17, so they are judged by test262's verdicts
+# (test262_valid) and answers (test262_answer) in the grammars those name, and left out in the others. Any difference
+# from V8 is a wrong answer; a refusal of a valid pattern, an acceptance of an invalid one, and a match that reaches
+# its limit are counted apart and listed too.
 # captures.jsonl is judged on exec, the global search, the sticky flag, replace and split. A match is given 2 seconds.
 #
 # Ruby's JSON refuses a lone surrogate, which the data holds, so each lone surrogate escape is read as a code point of
-# Plane 15's private use area (U+F0000 + its offset from U+D800), which the data does not use (a line that does is
-# refused), and turned back into its code unit wherever the text is used.
+# Plane 15's private use area (U+F0800 + its offset from U+D800), which the data does not use (a line that does is
+# refused; test262's property escapes use U+F0000, the first of the area), and turned back into its code unit wherever
+# the text is used.
 require "json"
 require "corvus_regex_ecma262"
 
 module Dataset
   LIMIT = 2.0
   REPLACEMENT = "<$&|$1|$2|$10|$<a>|$$|$`|$'>"
-  LONE = /[\u{F0000}-\u{F07FF}]/
+  LONE = /[\u{F0800}-\u{F0FFF}]/
   SURROGATE_ESCAPE = /\\\\|\\u(d[89ab][0-9a-f]{2})\\u(d[c-f][0-9a-f]{2})|\\u(d[89a-f][0-9a-f]{2})/i
   R = CorvusRegexEcma262
 
@@ -31,12 +35,12 @@ module Dataset
 
   # The line with each lone surrogate escape written as the escape of its Plane 15 code point.
   def readable(line)
-    raise "the data uses U+F0000-U+F07FF, which the runner reads lone surrogates as" if line.match?(/\\udb8[01]|[\u{F0000}-\u{F07FF}]/i)
+    raise "the data uses U+F0800-U+F0FFF, which the runner reads lone surrogates as" if line.match?(/\\udb8[23]|[\u{F0800}-\u{F0FFF}]/i)
 
     line.gsub(SURROGATE_ESCAPE) do |m|
       next m unless Regexp.last_match(3)
 
-      v = 0xF0000 + Regexp.last_match(3).hex - 0xD800 - 0x10000
+      v = 0xF0800 + Regexp.last_match(3).hex - 0xD800 - 0x10000
       format("\\u%04x\\u%04x", 0xD800 + (v >> 10), 0xDC00 + (v & 0x3FF))
     end
   end
@@ -44,8 +48,8 @@ module Dataset
   # The UTF-16 code units of a text as read.
   def units(s)
     s.each_codepoint.flat_map do |c|
-      if c >= 0xF0000 && c <= 0xF07FF
-        [0xD800 + c - 0xF0000]
+      if c >= 0xF0800 && c <= 0xF0FFF
+        [0xD800 + c - 0xF0800]
       elsif c > 0xFFFF
         v = c - 0x10000
         [0xD800 + (v >> 10), 0xDC00 + (v & 0x3FF)]
@@ -102,6 +106,12 @@ module Dataset
     [nil, "ERROR: #{e.message}", true]
   end
 
+  # Whether a deviation is judged by test262's answers: one of the Unicode version, which the gem has as test262 has it.
+  def by_test262?(marked) = marked["deviation"] == "unicode-version"
+
+  # Whether a record is left out: one marked v8_deviation that is not judged by test262's answers.
+  def skipped_record?(r) = r["v8_deviation"] == true && !by_test262?(r)
+
   def modes_of(r)
     valid = r["valid"] || {}
     modes = [["u", "unicode", valid["unicode"] == true], ["", "legacy", valid["legacy"] == true]]
@@ -112,7 +122,13 @@ module Dataset
   def judge_tests(name, r, pattern, c, w)
     flags = r["flags"].to_s
     head_pattern = shown(pattern)
+    # A record marked for the Unicode version is judged in the grammars test262 gives a verdict for, by it.
+    record_by_test262 = r["v8_deviation"] == true && by_test262?(r)
     modes_of(r).each do |suffix, answer, valid|
+      if record_by_test262
+        valid = (r["test262_valid"] || {})[answer]
+        next unless [true, false].include?(valid)
+      end
       mode_flags = flags + suffix
       head = "#{name}\t/#{head_pattern}/#{mode_flags}"
       re, message, is_error = compile(pattern, mode_flags)
@@ -130,7 +146,12 @@ module Dataset
         next
       end
       (r["tests"] || []).each do |test|
-        expected = test[answer]
+        # A test marked for the Unicode version, or any test of a record so marked, is judged by test262's answer in
+        # this grammar, and left out where it has none. A test marked otherwise is left out.
+        marked = test["v8_deviation"] == true
+        next if marked && !by_test262?(test)
+
+        expected = (marked || record_by_test262 ? test["test262_answer"] || {} : test)[answer]
         text = test["text"]
         next unless [true, false].include?(expected) && text
 
@@ -296,7 +317,7 @@ module Dataset
       next if line.strip.empty?
 
       r = JSON.parse(readable(line))
-      if r["v8_deviation"]
+      if skipped_record?(r)
         skipped += 1
         next
       end
