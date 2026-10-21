@@ -24,12 +24,13 @@ jobs:
         uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1.327.0
         with:
           ruby-version: '3.3'
-      - name: Install the toolchain of rust-toolchain.toml
-        run: rustup show
       - name: Format and clippy
+        # The toolchain is named here rather than in a rust-toolchain.toml, which would override the cross-compiling
+        # containers' own toolchains (those carry the targets' standard libraries).
         run: |
-          cargo fmt --check
-          cargo clippy -j 4 --all-targets -- -D warnings
+          rustup toolchain install 1.98.0 --profile minimal -c clippy -c rustfmt
+          cargo +1.98.0 fmt --check
+          cargo +1.98.0 clippy -j 4 --all-targets -- -D warnings
       - name: The versions agree
         # version.rb and the extension's Cargo.toml name one version.
         run: |

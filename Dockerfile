@@ -17,7 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends libclang-dev cl
 ENV PATH=/root/.cargo/bin:$PATH
 WORKDIR /src
 COPY . .
-RUN rustup show && bundle install --quiet && bundle exec rake compile
+RUN rustup toolchain install 1.98.0 --profile minimal && rustup default 1.98.0 && bundle install --quiet && bundle exec rake compile
 
 FROM ruby:3.4-slim-bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends git util-linux ca-certificates python3 \
