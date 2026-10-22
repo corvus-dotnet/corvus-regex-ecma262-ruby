@@ -97,6 +97,11 @@ fn limit_of(timeout: Option<f64>) -> Option<Duration> {
     timeout.map(|t| Duration::from_secs_f64(t.max(0.0)))
 }
 
+/// A timeout in seconds, nil for none.
+fn seconds_of(timeout: Option<Duration>) -> Option<f64> {
+    timeout.map(|t| t.as_secs_f64())
+}
+
 #[magnus::wrap(class = "CorvusRegexEcma262::Native::Regex", free_immediately, size)]
 struct NativeRegex {
     inner: ecma::Regex,
@@ -134,17 +139,17 @@ impl NativeRegex {
         Ok(match view {
             View::Utf8(s) => {
                 let caps = match limit {
-                    Some(l) => self.inner.try_captures_at(s, start, l).map_err(|e| limit_error(ruby, e))?,
+                    Some(l) => self.inner.captures_at_within(s, start, l),
                     None => self.inner.captures_at(s, start),
                 };
-                caps.map(|c| self.flat(ruby, &c))
+                caps.map_err(|e| limit_error(ruby, e))?.map(|c| self.flat(ruby, &c))
             }
             View::Utf16(u) => {
                 let caps = match limit {
-                    Some(l) => self.inner.try_captures_at_utf16(u, start, l).map_err(|e| limit_error(ruby, e))?,
+                    Some(l) => self.inner.captures_at_within_utf16(u, start, l),
                     None => self.inner.captures_at_utf16(u, start),
                 };
-                caps.map(|c| self.flat(ruby, &c))
+                caps.map_err(|e| limit_error(ruby, e))?.map(|c| self.flat(ruby, &c))
             }
         })
     }
@@ -211,10 +216,15 @@ impl Drop for Locked {
 }
 
 impl NativeRegex {
-    fn new(ruby: &Ruby, pattern: RString, flags: RString) -> Result<NativeRegex, Error> {
+    /// A pattern with the flags, and a timeout in seconds (0 for none), or nil for the default timeout.
+    fn new(ruby: &Ruby, pattern: RString, flags: RString, timeout: Option<f64>) -> Result<NativeRegex, Error> {
         let pattern = pattern.to_string()?;
         let flags = flags.to_string()?;
-        let inner = ecma::Regex::new(&pattern, &flags).map_err(|e| compile_error(ruby, e))?;
+        let inner = match limit_of(timeout) {
+            None => ecma::Regex::new(&pattern, &flags),
+            Some(t) => ecma::Flags::parse(&flags).and_then(|f| ecma::Regex::with_timeout(&pattern, f, Some(t))),
+        }
+        .map_err(|e| compile_error(ruby, e))?;
         let written = format!("{}", inner.flags());
         let names = inner.group_names().map(str::to_owned).collect();
         Ok(NativeRegex {
@@ -235,6 +245,10 @@ impl NativeRegex {
 
     fn flags(&self) -> String {
         format!("{}", self.inner.flags())
+    }
+
+    fn timeout(&self) -> Option<f64> {
+        seconds_of(self.inner.match_timeout())
     }
 
     fn group_count(&self) -> usize {
@@ -259,13 +273,13 @@ impl NativeRegex {
         }
         let inner = &rb_self.inner;
         match (view, limit_of(timeout)) {
-            (View::Utf8(t), None) => Ok(inner.is_match_at(t, start)),
-            (View::Utf16(u), None) => Ok(inner.is_match_at_utf16(u, start)),
+            (View::Utf8(t), None) => inner.is_match_at(t, start).map_err(|e| limit_error(ruby, e)),
+            (View::Utf16(u), None) => inner.is_match_at_utf16(u, start).map_err(|e| limit_error(ruby, e)),
             (View::Utf8(t), Some(l)) => {
-                inner.try_find_at(t, start, l).map(|m| m.is_some()).map_err(|e| limit_error(ruby, e))
+                inner.find_at_within(t, start, l).map(|m| m.is_some()).map_err(|e| limit_error(ruby, e))
             }
             (View::Utf16(u), Some(l)) => {
-                inner.try_find_at_utf16(u, start, l).map(|m| m.is_some()).map_err(|e| limit_error(ruby, e))
+                inner.find_at_within_utf16(u, start, l).map(|m| m.is_some()).map_err(|e| limit_error(ruby, e))
             }
         }
     }
@@ -311,10 +325,11 @@ impl NativeRegex {
     fn count(ruby: &Ruby, rb_self: &Self, s: RString) -> Result<usize, Error> {
         // SAFETY: no Ruby code runs while the text is borrowed.
         let text = unsafe { text_of(ruby, s)? };
-        Ok(match text.view() {
-            View::Utf8(t) => rb_self.inner.find_iter(t).count(),
-            View::Utf16(u) => rb_self.inner.find_iter_utf16(u).count(),
-        })
+        let counted = match text.view() {
+            View::Utf8(t) => rb_self.inner.find_iter(t).try_fold(0, |n, m| m.map(|_| n + 1)),
+            View::Utf16(u) => rb_self.inner.find_iter_utf16(u).try_fold(0, |n, m| m.map(|_| n + 1)),
+        };
+        counted.map_err(|e| limit_error(ruby, e))
     }
 
     /// The text with the first match replaced, or every match with all, by a template: the bytes, in the text's
@@ -327,10 +342,11 @@ impl NativeRegex {
         Ok(match (text.view(), template.view()) {
             (View::Utf8(t), View::Utf8(r)) => {
                 let out = if all { inner.replace_all(t, r) } else { inner.replace(t, r) };
-                ruby.str_from_slice(out.as_bytes())
+                ruby.str_from_slice(out.map_err(|e| limit_error(ruby, e))?.as_bytes())
             }
             (View::Utf16(t), View::Utf16(r)) => {
                 let out = if all { inner.replace_all_utf16(t, r) } else { inner.replace_utf16(t, r) };
+                let out = out.map_err(|e| limit_error(ruby, e))?;
                 let bytes: Vec<u8> = out.iter().flat_map(|u| u.to_le_bytes()).collect();
                 ruby.str_from_slice(&bytes)
             }
@@ -350,7 +366,8 @@ impl NativeRegex {
                 let pieces = match limit {
                     Some(n) => inner.splitn(t, n),
                     None => inner.split(t),
-                };
+                }
+                .map_err(|e| limit_error(ruby, e))?;
                 for p in pieces {
                     out.push(p.map(|p| ruby.str_from_slice(p.as_bytes())))?;
                 }
@@ -359,7 +376,8 @@ impl NativeRegex {
                 let pieces = match limit {
                     Some(n) => inner.splitn_utf16(u, n),
                     None => inner.split_utf16(u),
-                };
+                }
+                .map_err(|e| limit_error(ruby, e))?;
                 for p in pieces {
                     out.push(p.map(|p| {
                         let bytes: Vec<u8> = p.iter().flat_map(|u| u.to_le_bytes()).collect();
@@ -383,10 +401,16 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
     let native = module.define_module("Native")?;
     native.define_singleton_method("crate_version", function!(|| env!("CARGO_PKG_VERSION"), 0))?;
     let regex = native.define_class("Regex", ruby.class_object())?;
-    regex.define_singleton_method("new", function!(NativeRegex::new, 2))?;
+    native.define_singleton_method(
+        "default_timeout=",
+        function!(|t: Option<f64>| ecma::set_default_match_timeout(limit_of(t)), 1),
+    )?;
+    native.define_singleton_method("default_timeout", function!(|| seconds_of(ecma::default_match_timeout()), 0))?;
+    regex.define_singleton_method("new", function!(NativeRegex::new, 3))?;
     regex.define_singleton_method("valid?", function!(NativeRegex::is_valid, 2))?;
     regex.define_method("source", method!(NativeRegex::source, 0))?;
     regex.define_method("flags", method!(NativeRegex::flags, 0))?;
+    regex.define_method("timeout", method!(NativeRegex::timeout, 0))?;
     regex.define_method("group_count", method!(NativeRegex::group_count, 0))?;
     regex.define_method("names", method!(NativeRegex::names, 0))?;
     regex.define_method("global?", method!(NativeRegex::global, 0))?;
