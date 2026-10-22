@@ -17,9 +17,9 @@ builds for Linux (glibc and musl), macOS and Windows, x64 and arm64, for Ruby 3.
   `match?` take a timeout, so neither a pattern nor a text from outside can make a program hang.
 
 **Compliance.** Over the [ECMA-262 test data](https://github.com/corvus-dotnet/ecma262-regex-test-data) (what V8 says
-about 109,547 patterns and 5,325,026 texts, `exec`, the global search, `replace` and `split` among them), through this
-gem over UTF-16LE and UTF-8 strings, it gives 23,647,077 right answers and none wrong, refuses no valid pattern,
-accepts no invalid one and reaches no limit. CI runs the whole data through each native gem on its platform.
+about 117,889 patterns and 5,884,566 texts, test262's and `exec`, the global search, `replace` and `split` among
+them), through this gem over UTF-16LE and UTF-8 strings, it gives 26,950,829 right answers and none wrong, refuses no
+valid pattern, accepts no invalid one and reaches no limit. CI runs the whole data through each native gem on its platform.
 
 ## Install
 

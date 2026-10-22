@@ -14,38 +14,61 @@
 # pattern, an acceptance of an invalid one, and a match that reaches its limit are counted apart and listed too.
 # captures.jsonl is judged on exec, the global search, the sticky flag, replace and split. A match is given 2 seconds.
 #
-# Ruby's JSON refuses a lone surrogate, which the data holds, so each lone surrogate escape is read as a code point of
-# Plane 15's private use area (U+F0000 + its offset from U+D800), which the data does not use (a line that does is
-# refused), and turned back into its code unit wherever the text is used.
+# Ruby's JSON refuses a lone surrogate, which the data holds, so each lone surrogate escape is read as a code point of a
+# block of 2,048 private use code points (the block's first + its offset from U+D800) and turned back into its code unit
+# wherever the text is used. The block is chosen for each line from the blocks of Planes 15 and 16: the first whose
+# code points the line does not hold, which is known when the line, read with that block, holds as many of them as it
+# had lone surrogate escapes. So no character of the data is taken for a lone surrogate (test262's texts hold the ends
+# of the private use ranges).
 require "json"
 require "corvus_regex_ecma262"
 
 module Dataset
   LIMIT = 2.0
   REPLACEMENT = "<$&|$1|$2|$10|$<a>|$$|$`|$'>"
-  LONE = /[\u{F0000}-\u{F07FF}]/
+  # The first code point of each block a line's lone surrogates may be read as.
+  BLOCKS = (0xF0000..0xFF000).step(0x800).to_a + (0x100000..0x10F000).step(0x800).to_a
   SURROGATE_ESCAPE = /\\\\|\\u(d[89ab][0-9a-f]{2})\\u(d[c-f][0-9a-f]{2})|\\u(d[89a-f][0-9a-f]{2})/i
   R = CorvusRegexEcma262
 
   module_function
 
-  # The line with each lone surrogate escape written as the escape of its Plane 15 code point.
-  def readable(line)
-    raise "the data uses U+F0000-U+F07FF, which the runner reads lone surrogates as" if line.match?(/\\udb8[01]|[\u{F0000}-\u{F07FF}]/i)
+  # The record of a line, its lone surrogates read as code points of the first block the line does not use.
+  def read(line)
+    BLOCKS.each do |block|
+      written = 0
+      rewritten = line.gsub(SURROGATE_ESCAPE) do |m|
+        next m unless Regexp.last_match(3)
 
-    line.gsub(SURROGATE_ESCAPE) do |m|
-      next m unless Regexp.last_match(3)
+        written += 1
+        v = block + Regexp.last_match(3).hex - 0xD800 - 0x10000
+        format("\\u%04x\\u%04x", 0xD800 + (v >> 10), 0xDC00 + (v & 0x3FF))
+      end
+      r = JSON.parse(rewritten)
+      next unless count_in(r, block) == written
 
-      v = 0xF0000 + Regexp.last_match(3).hex - 0xD800 - 0x10000
-      format("\\u%04x\\u%04x", 0xD800 + (v >> 10), 0xDC00 + (v & 0x3FF))
+      @block = block
+      @lone = Regexp.new(format("[\\u{%x}-\\u{%x}]", block, block + 0x7FF))
+      return r
+    end
+    raise "every block of Planes 15 and 16 is used by the line"
+  end
+
+  # How many code points of a block the strings of a value hold.
+  def count_in(value, block)
+    case value
+    when String then value.each_codepoint.count { |c| c >= block && c < block + 0x800 }
+    when Array then value.sum { |v| count_in(v, block) }
+    when Hash then value.sum { |k, v| count_in(k, block) + count_in(v, block) }
+    else 0
     end
   end
 
   # The UTF-16 code units of a text as read.
   def units(s)
     s.each_codepoint.flat_map do |c|
-      if c >= 0xF0000 && c <= 0xF07FF
-        [0xD800 + c - 0xF0000]
+      if c >= @block && c < @block + 0x800
+        [0xD800 + c - @block]
       elsif c > 0xFFFF
         v = c - 0x10000
         [0xD800 + (v >> 10), 0xDC00 + (v & 0x3FF)]
@@ -56,9 +79,9 @@ module Dataset
   end
 
   def utf16(s) = units(s).pack("v*").force_encoding(Encoding::UTF_16LE)
-  def lone?(s) = s.match?(LONE)
+  def lone?(s) = s.match?(@lone)
   # UTF-8, a lone surrogate as U+FFFD (as String::from_utf16_lossy writes it).
-  def utf8_lossy(s) = s.gsub(LONE, "�")
+  def utf8_lossy(s) = s.gsub(@lone, "�")
 
   # The pattern as the Rust runner shows it: through UTF-8 (a lone surrogate as U+FFFD), escaped.
   def shown(pattern) = escape(utf8_lossy(pattern))
@@ -295,7 +318,7 @@ module Dataset
     lines.each do |line|
       next if line.strip.empty?
 
-      r = JSON.parse(readable(line))
+      r = read(line)
       if r["v8_deviation"]
         skipped += 1
         next
