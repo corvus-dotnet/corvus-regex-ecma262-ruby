@@ -170,6 +170,66 @@ class TestRegex < Minitest::Test
     refute R.compile('^(a+)+$').match?(text, timeout: 1)
   end
 
+  NEVER = '^(?:(a+)\1*)+$'
+
+  def test_a_pattern_has_a_timeout_every_method_honours
+    text = ("a" * 60) + "b"
+    re = R.compile(NEVER, "u", timeout: 0.03)
+    assert_in_delta 0.03, re.timeout, 1e-9
+    calls = [
+      -> { re.match?(text) },
+      -> { re.match(text) },
+      -> { re.each_match(text).to_a },
+      -> { re.match_count(text) },
+      -> { re.replace(text, "x") },
+      -> { re.replace_all(text, "x") },
+      -> { re.replace(text) { "x" } },
+      -> { re.split(text) },
+      -> { re.split(text, 2) },
+      -> { re.match?(text.encode(Encoding::UTF_16LE)) },
+      -> { re.replace(text.encode(Encoding::UTF_16LE), "x") },
+      -> { re.split(text.encode(Encoding::UTF_16LE)) },
+    ]
+    calls.each { |call| assert_raises(R::MatchLimitError) { call.call } }
+    # A text answered within the timeout is answered by every method.
+    assert re.match?("aaaa")
+    assert_equal "<aaaa>", re.replace("aaaa", "<$&>")
+    assert_equal 3, re.split("aaaa").size
+    # A timeout of its own takes the pattern's place for one match (0 for none).
+    assert R.compile('^(a+)\1$', timeout: 0.000001).match?("aaaa", timeout: 0)
+    assert_raises(R::MatchLimitError) { R.compile(NEVER, "u", timeout: 3600).match?(text, timeout: 0.03) }
+    # The matches before the one that reached the timeout are yielded, then the error ends the search.
+    found = []
+    assert_raises(R::MatchLimitError) do
+      R.compile('(?:(a+)\1*)+$|b', "g", timeout: 0.03).each_match("b" + text) { |m| found << m.to_s }
+    end
+    assert_equal ["b"], found
+  end
+
+  def test_a_timeout_caps_the_memory_of_a_match
+    e = assert_raises(R::MatchLimitError) { R.compile("(?:a?){2147483647}", timeout: 3600).match?("") }
+    assert_match(/memory/, e.message)
+  end
+
+  def test_the_default_timeout
+    assert_nil R.default_timeout
+    assert_nil R.compile("a").timeout
+    begin
+      R.default_timeout = 0.03
+      assert_in_delta 0.03, R.default_timeout, 1e-9
+      re = R.compile(NEVER, "u")
+      own = R.compile("a", timeout: 5)
+      none = R.compile("a", timeout: 0)
+    ensure
+      R.default_timeout = nil
+    end
+    assert_nil R.default_timeout
+    assert_in_delta 0.03, re.timeout, 1e-9
+    assert_raises(R::MatchLimitError) { re.match?(("a" * 60) + "b") }
+    assert_equal 5.0, own.timeout
+    assert_nil none.timeout
+  end
+
   def test_encodings
     assert_raises(ArgumentError) { R.compile("a").match("\xFF".b + "a") }
     assert R.compile("a").match?("a".b)

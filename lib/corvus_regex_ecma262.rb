@@ -32,9 +32,12 @@ module CorvusRegexEcma262
     attr_reader :names
 
     # Compiles a pattern with the flags new RegExp(pattern, flags) takes, any of dgimsuvy. Raises InvalidPatternError,
-    # InvalidFlagsError or PatternTooLargeError (each an Error).
-    def initialize(pattern, flags = "")
-      @native = Native::Regex.new(CorvusRegexEcma262.utf8(pattern), flags.to_s)
+    # InvalidFlagsError or PatternTooLargeError (each an Error). timeout: is the time in seconds each match may take
+    # before it is abandoned with MatchLimitError (0 for none); nil takes CorvusRegexEcma262.default_timeout, which is
+    # none unless set. A timeout also caps the backtracking memory of a match; without one a match has no limit of time
+    # or of memory, so give a pattern or a text from outside one.
+    def initialize(pattern, flags = "", timeout: nil)
+      @native = Native::Regex.new(CorvusRegexEcma262.utf8(pattern), flags.to_s, timeout&.to_f)
       @names = @native.names.freeze
       freeze
     end
@@ -50,17 +53,22 @@ module CorvusRegexEcma262
     # The flags as RegExp.prototype.flags writes them, in the order dgimsuvy.
     def flags = @native.flags
 
+    # The time in seconds each match may take before it is abandoned with MatchLimitError, or nil for no limit.
+    def timeout = @native.timeout
+
     # The number of capturing groups.
     def group_count = @native.group_count
 
     # Whether the pattern matches at or after pos (at pos alone with the y flag), as RegExp.prototype.test with
-    # lastIndex set to pos. With timeout: (seconds), a match that reaches it raises MatchLimitError.
+    # lastIndex set to pos. A match that reaches the pattern's timeout raises MatchLimitError; timeout: (seconds) takes
+    # its place for this match (0 for none).
     def match?(string, pos = 0, timeout: nil)
       @native.test(string, CorvusRegexEcma262.unit_of(string, pos), timeout&.to_f)
     end
 
     # The first match at or after pos, as exec finds it with lastIndex set to pos: a Match, or nil. With a block, the
-    # block's result for the match, or nil. With timeout: (seconds), a match that reaches it raises MatchLimitError.
+    # block's result for the match, or nil. A match that reaches the pattern's timeout raises MatchLimitError;
+    # timeout: (seconds) takes its place for this match (0 for none).
     def match(string, pos = 0, timeout: nil)
       groups = @native.exec(string, CorvusRegexEcma262.unit_of(string, pos), timeout&.to_f)
       return nil unless groups
@@ -71,7 +79,8 @@ module CorvusRegexEcma262
 
     # Every match of a global search of the string, as matchAll makes one: yields each Match, or returns an
     # Enumerator. After an empty match the search goes on one character later, and with the y flag each match must
-    # start where the one before ended.
+    # start where the one before ended. A match that reaches the pattern's timeout raises MatchLimitError, and ends the
+    # search.
     def each_match(string)
       return enum_for(:each_match, string) unless block_given?
 
@@ -258,8 +267,18 @@ module CorvusRegexEcma262
   end
 
   class << self
-    # Compiles a pattern: Regex.new(pattern, flags).
-    def compile(pattern, flags = "") = Regex.new(pattern, flags)
+    # Compiles a pattern: Regex.new(pattern, flags, timeout:).
+    def compile(pattern, flags = "", timeout: nil) = Regex.new(pattern, flags, timeout: timeout)
+
+    # The timeout in seconds of every Regex made without one of its own, or nil for no limit (the default).
+    def default_timeout = Native.default_timeout
+
+    # Sets the timeout of every Regex made from now on without one of its own: seconds, or nil (or 0) for no limit. It
+    # is the process-wide default of .NET's REGEX_DEFAULT_MATCH_TIMEOUT; a program that matches patterns or texts from
+    # outside should set one when it starts. A Regex already made keeps its own.
+    def default_timeout=(seconds)
+      Native.default_timeout = seconds&.to_f
+    end
 
     # Whether a pattern is valid with the flags, without compiling it.
     def valid?(pattern, flags = "") = Regex.valid?(pattern, flags)
