@@ -217,7 +217,8 @@ module Industry
         n = line["count"]
         entry = { "median" => m.round(1), "min" => sorted[0], "max" => sorted[-1], "count" => n, "rounds" => each.length,
                   "spread" => spread.round(4), "each" => each }
-        oracle = figures.dig("v8", k, "line", "count")
+        # Without V8 in the run (V8=0), its count as the workloads carry it (v8Count, from the central run).
+        oracle = figures.key?("v8") ? figures.dig("v8", k, "line", "count") : workloads[k]["v8Count"]
         if oracle && n != oracle && e != "v8"
           differ << "#{e} #{wid} #{n} vs V8 #{oracle}"
           warn format("COUNT  %-13s %-62s %s against V8's %s", e, wid, n, oracle)
