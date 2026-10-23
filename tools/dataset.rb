@@ -13,6 +13,8 @@
 # alone. Records marked v8_deviation are left out. Any difference from V8 is a wrong answer; a refusal of a valid
 # pattern, an acceptance of an invalid one, and a match that reaches its limit are counted apart and listed too.
 # captures.jsonl is judged on exec, the global search, the sticky flag, replace and split. A match is given 2 seconds.
+# ill-formed-utf8.jsonl holds bytes that are not UTF-8, each one answer over UTF-8 under each grammar the pattern is
+# valid in, whose right answer is a refusal: the gem's ArgumentError for a UTF-8 string that is not.
 #
 # Ruby's JSON refuses a lone surrogate, which the data holds, so each lone surrogate escape is read as a code point of a
 # block of 2,048 private use code points (the block's first + its offset from U+D800) and turned back into its code unit
@@ -179,6 +181,51 @@ module Dataset
     end
   end
 
+  def judge_ill_formed(r, pattern, c, w)
+    name = "ill-formed-utf8.jsonl"
+    flags = r["flags"].to_s
+    head_pattern = shown(pattern)
+    modes_of(r).each do |suffix, _, valid|
+      mode_flags = flags + suffix
+      head = "#{name}\t/#{head_pattern}/#{mode_flags}"
+      re, message, is_error = compile(pattern, mode_flags)
+      unless re
+        c.errors += 1 if is_error
+        if valid
+          c.refused += 1
+          w << "REFUSED\t#{head}\t#{message.lines.first&.chomp}"
+        end
+        next
+      end
+      unless valid
+        c.accepted += 1
+        w << "ACCEPTED-INVALID\t#{head}"
+        next
+      end
+      (r["tests"] || []).each do |test|
+        hex = test["bytes"]
+        subject = [hex].pack("H*").force_encoding(Encoding::UTF_8)
+        begin
+          got = re.match?(subject, timeout: LIMIT)
+        rescue R::MatchLimitError => e
+          c.limited += 1
+          w << "LIMIT\t#{head}\t#{hex}\tutf8\t#{e.message.include?('memory') ? 'memory' : 'time'}"
+          next
+        rescue ArgumentError => e
+          if e.message.include?("UTF-8")
+            c.right += 1
+          else
+            c.errors += 1
+            w << "ERROR\t#{head}\t#{hex}\tutf8\t#{e.class}: #{e.message}"
+          end
+          next
+        end
+        c.wrong += 1
+        w << "WRONG\t#{head}\t#{hex}\tutf8\tread as UTF-8 (#{got}), not refused"
+      end
+    end
+  end
+
   # Whether a match's groups are the expected [start, end] pairs (nil for a group that did not take part), expected
   # positions mapped by map (identity when nil), the match's read in bytes when bytes is set (code units otherwise).
   def same_slots(expected, m, map, bytes)
@@ -327,7 +374,11 @@ module Dataset
       pattern = r["pattern"]
       next if pattern.nil?
 
-      name == "captures.jsonl" ? judge_captures(r, pattern, c, w) : judge_tests(name, r, pattern, c, w)
+      case name
+      when "captures.jsonl" then judge_captures(r, pattern, c, w)
+      when "ill-formed-utf8.jsonl" then judge_ill_formed(r, pattern, c, w)
+      else judge_tests(name, r, pattern, c, w)
+      end
     end
     [c, w, records, skipped]
   end
