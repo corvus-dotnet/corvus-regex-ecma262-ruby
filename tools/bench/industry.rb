@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 # The Industry benchmark from Ruby: each workload counted by each engine, in nanoseconds per count, under the
-# interleaved protocol every Corvus ECMA-262 engine's harness follows (docs/benchmarks/README.md in
+# interleaved protocol every harness of the central benchmark page follows (docs/benchmarks/README.md in
 # corvus-regex-ecma262-rs), a port of the C harness's driver (tools/c/industry.c there):
 #
 #   ruby tools/bench/industry.rb <workloads.json> [--engines corvus-utf8,corvus-utf16,ruby,v8] [--v8 <industry.mjs>]
