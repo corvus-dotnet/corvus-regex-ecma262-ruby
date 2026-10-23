@@ -96,7 +96,7 @@ search walks it.
 
 The Industry workloads of dotnet/performance, this gem against Ruby's `Regexp` and V8, are on the central page,
 [corvus-oss.org/corvus-regex-ecma262-benchmarks](https://corvus-oss.org/corvus-regex-ecma262-benchmarks/), measured
-nightly on one runner with every other Corvus ECMA-262 engine.
+nightly on one runner with the engines of every other source.
 
 ## Repository
 
