@@ -11,9 +11,9 @@
 # each round, so that a workload's rounds are seconds apart, as its engines are. Each figure is a child process of its
 # own (`industry.rb --one`, or `node industry.mjs --one` for V8), which warms for two fifths of its seconds, then times
 # `passes` passes of as many counts as fit the rest and reports their median. A workload's figure for an engine is the
-# median of its rounds, with the fastest and the slowest round as its spread; a figure whose spread, (slowest -
-# fastest) / median, is over --spread is listed in the run's facts (spread_over) and on stderr. A child that does not
-# finish in two minutes is stopped and recorded as such.
+# median of its rounds, with the fastest and the slowest round as its spread; a figure whose spread, (slowest - fastest)
+# / median, is over --spread is listed in the run's facts (spread_over) and on stderr. A figure that does not finish in
+# 30 s is stopped and recorded as giving no result within 30 s, and is not run in the workload's later rounds.
 #
 # The engines, each counting every match of a global search as a Ruby program that wants every match would:
 # - corvus-utf8 and corvus-utf16: this gem with the workload's flags and u, over the text as a UTF-8 String and as a
@@ -112,6 +112,9 @@ module Industry
     { "error" => "#{e.class}: #{e.message}" }
   end
 
+  # A figure stopped at the limit, which the page shows as giving no result within 30 s.
+  STOPPED = { "error" => "did not produce a result within 30 s", "limit" => 30 }.freeze
+
   # One figure in a child process: the child's line of JSON, or one with the error.
   def figure(v8, path, index, spec, seconds, passes)
     engine, program = spec.split("@", 2)
@@ -128,10 +131,10 @@ module Industry
     Open3.popen3(*cmd) do |stdin, stdout, _stderr, thread|
       stdin.close
       begin
-        Timeout.timeout(120) { out = stdout.read }
+        Timeout.timeout(30) { out = stdout.read }
       rescue Timeout::Error
         Process.kill("KILL", thread.pid)
-        return { "error" => "did not finish in two minutes" }
+        return STOPPED.dup
       end
     end
     line = out.lines.last
@@ -179,6 +182,9 @@ module Industry
       rounds.times do |rnd|
         engines.length.times do |turn|
           e = engines[(turn + rnd) % engines.length]
+          # A figure stopped at the limit in an earlier round is not run again.
+          next if figures[e][k] && figures[e][k]["line"] == STOPPED
+
           line = figure(opts["v8"], path, k, e, opts["seconds"], opts["passes"])
           fig = (figures[e][k] ||= { "each" => [], "line" => line })
           fig["line"] = line
