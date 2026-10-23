@@ -4,6 +4,8 @@ name: rubygems-publish
 # rubygems-build.yml. The release's tag must be v<version> for VERSION in lib/corvus_regex_ecma262/version.rb (ci.yml
 # checks it agrees with the extension's Cargo.toml). The source gem goes last, and its presence is what marks a
 # version as published: a run that fails part of the way can be run again, and skips the native gems RubyGems has.
+# A harness release (gh release create harness-<version>.<n> --latest=false), for a change to the benchmark harness
+# alone, publishes the harness image and nothing here.
 #
 # It authenticates with RubyGems trusted publishing (OIDC): no API key is stored. The gem's trusted publisher on
 # rubygems.org names this repository, this workflow file and the "rubygems" environment, so keep both names. A pending
@@ -22,6 +24,8 @@ concurrency:
 
 jobs:
   version:
+    # A harness release (a tag starting harness-) publishes the harness image alone.
+    if: ${{ !startsWith(github.event.release.tag_name, 'harness-') }}
     name: Version to publish
     runs-on: ubuntu-latest
     outputs:
