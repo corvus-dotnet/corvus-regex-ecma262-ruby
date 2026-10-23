@@ -245,7 +245,8 @@ module Dataset
   def judge_all(matches, all, map, bytes)
     n = 0
     matches.each do |m|
-      break if n >= all.length
+      # One match more than the data has: wrong, unless the data kept only the first twenty.
+      return all.length == 20 if n >= all.length
       return false if all[n].nil?
 
       s, t = all[n][0]
@@ -288,7 +289,10 @@ module Dataset
     ok = true
     n = 0
     g.each_match(u16) do |mm|
-      break if n >= all.length
+      if n >= all.length
+        ok &&= all.length == 20
+        break
+      end
 
       unless same_slots(all[n], mm, nil, false)
         ok = false
