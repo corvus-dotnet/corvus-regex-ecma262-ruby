@@ -7,3 +7,4 @@
 /lib/corvus_regex_ecma262/[0-9]*
 *.tsv
 Gemfile.lock
+__pycache__/
