@@ -18,9 +18,9 @@ builds for Linux (glibc and musl), macOS and Windows, x64 and arm64, for Ruby 3.
   too, so with a timeout neither a pattern nor a text from outside can make a program hang.
 
 **Compliance.** Over the [ECMA-262 test data](https://github.com/corvus-dotnet/ecma262-regex-test-data) (what V8 says
-about 123,087 patterns and 6,056,699 texts, test262's and `exec`, the global search, `replace` and `split` among them,
+about 123,833 patterns and 6,124,271 texts, test262's and `exec`, the global search, `replace` and `split` among them,
 and texts of bytes that are not UTF-8, which it refuses), through this gem over UTF-16LE and UTF-8 strings, it gives
-29,289,554 right answers and none wrong, refuses no valid pattern, accepts no invalid one and reaches no limit. CI runs
+29,689,063 right answers and none wrong, refuses no valid pattern, accepts no invalid one and reaches no limit. CI runs
 the whole data through each native gem on its platform.
 
 ## Install
