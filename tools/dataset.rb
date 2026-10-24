@@ -5,6 +5,7 @@
 # judges it:
 #
 #   ruby -Ilib tools/dataset.rb <data directory> <wrong-cases output file> [--files <glob>] [--workers N]
+#                               [--compliance <file>]
 #
 # Each record is asked about under each grammar V8 found it valid in: the record's flags with u added (the unicode
 # answers), the record's flags alone (the legacy answers) and, in the file that has them, the flags with v added (the
@@ -15,6 +16,15 @@
 # captures.jsonl is judged on exec, the global search, the sticky flag, replace and split. A match is given 2 seconds.
 # ill-formed-utf8.jsonl holds bytes that are not UTF-8, each one answer over UTF-8 under each grammar the pattern is
 # valid in, whose right answer is a refusal: the gem's ArgumentError for a UTF-8 string that is not.
+#
+# exec/test262.jsonl, the exec calls of test262 (in a directory of its own), is judged last: each call one exec with the
+# record's flags from its lastIndex, right when the positions of the match and of every group, the named groups and, with
+# g or y, the lastIndex after are V8's; one answer over the UTF-16LE string and, when the text holds no lone surrogate and
+# lastIndex is not between the halves of a pair, one over the UTF-8 string with positions in bytes.
+#
+# With --compliance <file>, the engine's compliance object is written to the file, as the benchmark page reads it
+# (docs/implementing-a-source.md in corvus-regex-ecma262-benchmarks): the counts, this runner and the calls it makes in
+# each encoding, and what it leaves out, which for this gem is nothing.
 #
 # Ruby's JSON refuses a lone surrogate, which the data holds, so each lone surrogate escape is read as a code point of a
 # block of 2,048 private use code points (the block's first + its offset from U+D800) and turned back into its code unit
@@ -362,6 +372,96 @@ module Dataset
     end
   end
 
+  EXEC = "exec/test262.jsonl"
+
+  # A call's lastIndex. Past the end of the text exec gives null; test262 sets it as far as 2^53 - 1 and
+  # Number.MAX_VALUE, so anything past the end reads as the text's length plus one.
+  def last_index_of(t, length)
+    v = t["lastIndex"]
+    v > length ? length + 1 : v.to_i
+  end
+
+  # Whether a position is between the halves of a surrogate pair, where UTF-8 has no position.
+  def inside_pair?(u, at) = at.positive? && at < u.length && u[at].between?(0xDC00, 0xDFFF) && u[at - 1].between?(0xD800, 0xDBFF)
+
+  # Whether a match (nil for none) is the call's answer: both null, or the same groups, the same named groups (present
+  # exactly when the pattern has names) and, with g or y, a lastIndex after at the match's end. map takes the answer's
+  # UTF-16 positions to the match's, and bytes reads the match in bytes.
+  def same_exec?(answer, m, names, carries, map, bytes)
+    return answer.nil? && m.nil? if answer.nil? || m.nil?
+
+    at = ->(g) { bytes ? m.byteoffset(g) : m.offset(g) }
+    span = ->(e) { e.nil? ? [nil, nil] : [map[e[0]], map[e[1]]] }
+    captures = answer["captures"]
+    return false unless captures.length == m.size && captures.each_with_index.all? { |e, g| at.call(g) == span.call(e) }
+
+    groups = answer["groups"]
+    if groups.nil?
+      return false unless names.empty?
+    else
+      return false unless groups.keys.sort == names.sort && groups.all? { |n, e| at.call(n) == span.call(e) }
+    end
+    !carries || map[answer["lastIndex"]] == at.call(0)[1]
+  end
+
+  # A record of exec/test262.jsonl: the pattern with its own flags (g, y and d among them), from each call's lastIndex.
+  def judge_exec(r, pattern, c, w)
+    flags = r["flags"].to_s
+    re, why, = compile(pattern, flags)
+    if re.nil?
+      c.refused += 1
+      w << "REFUSED\t#{EXEC}\t/#{shown(pattern)}/#{flags}\t#{why}"
+      return
+    end
+    carries = flags.include?("g") || flags.include?("y")
+    (r["tests"] || []).each do |t|
+      next if t["v8_deviation"]
+
+      text = t["text"]
+      u = units(text)
+      start = carries ? last_index_of(t, u.length) : 0
+      where = "/#{shown(pattern)}/#{flags}\t#{escape(text)}\t#{t["lastIndex"]}"
+      runs = [["utf16", utf16(text), start, (0..u.length).to_a, false]]
+      unless lone?(text) || inside_pair?(u, start)
+        # A UTF-8 string's positions are characters: those before lastIndex.
+        chars = start > u.length ? text.length + 1 : u[0, start].count { |x| !x.between?(0xDC00, 0xDFFF) }
+        runs << ["utf8", text, chars, byte_offsets(text), true]
+      end
+      runs.each do |encoding, subject, pos, map, bytes|
+        begin
+          m = start > u.length ? nil : re.match(subject, pos, timeout: LIMIT)
+        rescue R::MatchLimitError
+          c.limited += 1
+          w << "LIMIT\t#{EXEC}\t#{where}\t#{encoding}"
+          next
+        end
+        if same_exec?(t["answer"], m, re.names, carries, map, bytes)
+          c.right += 1
+        else
+          c.wrong += 1
+          w << "WRONG\t#{EXEC}\t#{where}\t#{encoding}"
+        end
+      end
+    end
+  end
+
+  # The engine's compliance as the benchmark page reads it: the counts, this runner and the calls it makes in each
+  # encoding, and what it leaves out.
+  def write_compliance(path, total)
+    File.write(path, "#{JSON.generate({
+      "right" => total.right, "wrong" => total.wrong, "refused" => total.refused, "acceptedInvalid" => total.accepted,
+      "limited" => total.limited + total.errors,
+      "judge" => {
+        "runner" => "https://github.com/corvus-dotnet/corvus-regex-ecma262-ruby/blob/main/tools/dataset.rb",
+        "calls" => {
+          "utf16" => %w[match? match each_match replace replace_all split].map { |m| "Regex##{m}(UTF-16LE String)" },
+          "utf8" => %w[match? match each_match replace replace_all].map { |m| "Regex##{m}(UTF-8 String)" }
+        }
+      },
+      "excludes" => []
+    })}\n")
+  end
+
   def judge_lines(name, lines)
     c = Counts.zero
     w = []
@@ -379,6 +479,7 @@ module Dataset
       next if pattern.nil?
 
       case name
+      when EXEC then judge_exec(r, pattern, c, w)
       when "captures.jsonl" then judge_captures(r, pattern, c, w)
       when "ill-formed-utf8.jsonl" then judge_ill_formed(r, pattern, c, w)
       else judge_tests(name, r, pattern, c, w)
@@ -414,17 +515,22 @@ module Dataset
 
   def main(argv)
     data, wrong_path, *rest = argv
-    abort "usage: ruby -Ilib tools/dataset.rb <data directory> <wrong-cases file> [--files glob] [--workers N]" unless wrong_path
+    abort "usage: ruby -Ilib tools/dataset.rb <data directory> <wrong-cases file> [--files glob] [--workers N] " \
+          "[--compliance file]" unless wrong_path
     files_glob = "*.jsonl"
     workers = 4
+    compliance = nil
     rest.each_slice(2) do |flag, value|
       case flag
       when "--files" then files_glob = value
       when "--workers" then workers = Integer(value)
+      when "--compliance" then compliance = value
       else abort "unknown option #{flag}"
       end
     end
     files = Dir.children(data).select { |f| f.end_with?(".jsonl") && File.fnmatch(files_glob, f) }.sort
+    # The exec calls of test262, in a directory of their own: with the default filter, or one that names them.
+    files << EXEC if (files_glob == "*.jsonl" || files_glob.start_with?("exec")) && File.file?(File.join(data, EXEC))
     total = Counts.zero
     wrong = []
     records = skipped = 0
@@ -446,6 +552,7 @@ module Dataset
       total.add(file_total)
     end
     File.write(wrong_path, wrong.sort.map { |l| "#{l}\n" }.join)
+    write_compliance(compliance, total) if compliance
     elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - start
     puts format("\nrecords %d (skipped %d deviations)  right %d  wrong %d  refused-valid %d  accepted-invalid %d  " \
                 "limit %d  errors %d  in %.1fs", records, skipped, total.right, total.wrong, total.refused, total.accepted,
