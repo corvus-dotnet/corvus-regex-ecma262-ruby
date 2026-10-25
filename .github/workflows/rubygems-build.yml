@@ -8,6 +8,13 @@ name: rubygems-build
 # exactly what was built and tested here.
 on:
   workflow_call:
+    inputs:
+      tag:
+        # A release's tag (rubygems-publish.yml): its version is written into version.rb, the extension's Cargo.toml and
+        # Cargo.lock, which hold 0.0.0, before the build (tools/release/stamp.ps1). Empty for CI, which builds the
+        # placeholder.
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -24,6 +31,12 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+      - name: Write the release's version
+        if: inputs.tag != ''
+        shell: pwsh
+        env:
+          TAG: ${{ inputs.tag }}
+        run: ./tools/release/stamp.ps1 -Tag $env:TAG
       - name: Setup Ruby
         uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1.327.0
         with:
@@ -62,6 +75,12 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+      - name: Write the release's version
+        if: inputs.tag != ''
+        shell: pwsh
+        env:
+          TAG: ${{ inputs.tag }}
+        run: ./tools/release/stamp.ps1 -Tag $env:TAG
       - name: Setup Ruby
         uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1.327.0
         with:
