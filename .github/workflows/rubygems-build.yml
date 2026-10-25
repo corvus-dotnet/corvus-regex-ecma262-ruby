@@ -11,8 +11,8 @@ on:
     inputs:
       tag:
         # A release's tag (rubygems-publish.yml): its version is written into version.rb, the extension's Cargo.toml and
-        # Cargo.lock, which hold 0.0.0, before the build (tools/release/stamp.ps1). Empty for CI, which builds the
-        # placeholder.
+        # Cargo.lock, which hold 0.0.0, before the build (tools/release/stamp.ps1). CI passes v99.98.97, so that the
+        # stamping runs in every build of every pull request, as a release runs it.
         type: string
         default: ''
 
