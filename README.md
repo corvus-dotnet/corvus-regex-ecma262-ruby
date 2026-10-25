@@ -104,6 +104,19 @@ nightly on one runner with the engines of every other source.
 - `test/`: the tests; `tools/dataset.rb`: the test-data runner (`ruby -Ilib tools/dataset.rb <data> wrong.tsv`).
 - `tools/bench`: the benchmark harness and the script the image runs; `Dockerfile`: the image the central page runs.
 
+## Releasing
+
+Every merged pull request releases what it changed, unless it is labelled `no_release`. `auto-release.yml` runs
+`tools/release/release.ps1` on the merge commit: when the gem changed since its last tag (`Cargo.toml`, `Cargo.lock`,
+the gemspec, `Rakefile`, `ext/` or `lib/`), it makes a GitHub release tagged `v<version>` with the next patch version,
+and `rubygems-publish.yml` publishes it: `rubygems-build.yml` writes the version into `version.rb`, the extension's
+`Cargo.toml` and `Cargo.lock` (which hold `0.0.0`; `tools/release/stamp.ps1`), builds the native gems and the source
+gem and tests them, and they are pushed to RubyGems by trusted publishing. `harness-image.yml` publishes the harness
+image under the same tag. When only the harness changed (`Dockerfile`, `tools/bench/`, `tools/benchmarks/`), the
+release is `harness-<version>.<n>`, which publishes the image alone. A pull request that needs a minor or major version
+sets `nextVersion` in `.github/release.json` (a minor version is a breaking change). A pull request labelled
+`no_release` releases nothing, and its changes ship with the next release.
+
 ## Licence
 
 Apache-2.0. See [LICENSE](LICENSE).

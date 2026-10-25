@@ -1,11 +1,12 @@
 name: rubygems-publish
-# Publishes the corvus_regex_ecma262 gem to RubyGems when a GitHub release is published: the native gems (one per
-# platform, each with the extension for every supported Ruby) and then the source gem, all built and tested by
-# rubygems-build.yml. The release's tag must be v<version> for VERSION in lib/corvus_regex_ecma262/version.rb (ci.yml
-# checks it agrees with the extension's Cargo.toml). The source gem goes last, and its presence is what marks a
-# version as published: a run that fails part of the way can be run again, and skips the native gems RubyGems has.
-# A harness release (gh release create harness-<version>.<n> --latest=false), for a change to the benchmark harness
-# alone, publishes the harness image and nothing here.
+# Publishes the corvus_regex_ecma262 gem to RubyGems when a GitHub release tagged v<version> is published, which
+# auto-release.yml does after a merged pull request that changed the gem: the native gems (one per platform, each with
+# the extension for every supported Ruby) and then the source gem, all built and tested by rubygems-build.yml. The
+# version is the tag's: version.rb, the extension's Cargo.toml and Cargo.lock hold 0.0.0, and rubygems-build.yml writes
+# the tag's version into them before it builds (tools/release/stamp.ps1). The source gem goes last, and its presence is
+# what marks a version as published: a run that fails part of the way can be run again, and skips the native gems
+# RubyGems has. A harness release (harness-<version>.<n>), for a change to the benchmark harness alone, publishes the
+# harness image and nothing here.
 #
 # It authenticates with RubyGems trusted publishing (OIDC): no API key is stored. The gem's trusted publisher on
 # rubygems.org names this repository, this workflow file and the "rubygems" environment, so keep both names. A pending
@@ -35,16 +36,16 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - name: Check the tag names this version and whether RubyGems has it
+      - name: Take the version from the tag and ask whether RubyGems has it
         id: check
         env:
           TAG: ${{ github.event.release.tag_name }}
         run: |
-          version=$(sed -n 's/^  VERSION = "\(.*\)"$/\1/p' lib/corvus_regex_ecma262/version.rb)
-          if [ "$TAG" != "v$version" ]; then
-            echo "::error::The release's tag is $TAG but version.rb says $version (the tag must be v$version)."
+          if ! [[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "::error::The release's tag is $TAG, which is not v<major>.<minor>.<patch>."
             exit 1
           fi
+          version=${BASH_REMATCH[1]}
           echo "version=$version" >> "$GITHUB_OUTPUT"
           # The source gem marks a version as published; RubyGems answers 404 for a version it does not have.
           status=$(curl -s -o /dev/null -w '%{http_code}' "https://rubygems.org/api/v2/rubygems/corvus_regex_ecma262/versions/$version.json")
@@ -61,6 +62,8 @@ jobs:
     needs: version
     if: needs.version.outputs.publish == 'true'
     uses: ./.github/workflows/rubygems-build.yml
+    with:
+      tag: ${{ github.event.release.tag_name }}
 
   publish:
     name: Publish

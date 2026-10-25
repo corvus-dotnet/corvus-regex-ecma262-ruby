@@ -1,6 +1,6 @@
 [package]
 name = "corvus_regex_ecma262"
-version = "0.2.1"
+version = "0.0.0"
 edition = "2024"
 rust-version = "1.89"
 description = "The native extension of the corvus_regex_ecma262 gem: the corvus-regex-ecma262 crate over Ruby strings."

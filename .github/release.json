@@ -1,0 +1,46 @@
+{
+  "packages": [
+    {
+      "name": "corvus_regex_ecma262",
+      "tag": "v",
+      "paths": [
+        "Cargo.toml",
+        "Cargo.lock",
+        "corvus_regex_ecma262.gemspec",
+        "Rakefile",
+        "ext/",
+        "lib/"
+      ],
+      "stamp": [
+        {
+          "file": "lib/corvus_regex_ecma262/version.rb",
+          "placeholder": "  VERSION = \"0.0.0\"",
+          "with": "  VERSION = \"{version}\"",
+          "count": 1
+        },
+        {
+          "file": "ext/corvus_regex_ecma262/Cargo.toml",
+          "placeholder": "version = \"0.0.0\"",
+          "with": "version = \"{version}\"",
+          "count": 1
+        },
+        {
+          "file": "Cargo.lock",
+          "placeholder": "name = \"corvus_regex_ecma262\"\nversion = \"0.0.0\"\n",
+          "with": "name = \"corvus_regex_ecma262\"\nversion = \"{version}\"\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "name": "harness",
+      "harnessOf": "corvus_regex_ecma262",
+      "tag": "harness-",
+      "paths": [
+        "Dockerfile",
+        "tools/bench/",
+        "tools/benchmarks/"
+      ]
+    }
+  ]
+}
