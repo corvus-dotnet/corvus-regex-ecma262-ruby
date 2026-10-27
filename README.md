@@ -57,9 +57,9 @@ CorvusRegexEcma262.compile('\s*(;)\s*').split("a ; b;c")  # => ["a", ";", "b", "
 
 | | |
 |---|---|
-| `Regex.new(pattern, flags = "", timeout: nil)`, `CorvusRegexEcma262.compile` | Compiles a pattern as `new RegExp(pattern, flags)` does. `timeout:` is the match timeout in seconds (0 for none; nil for the default). |
+| `Regex.new(pattern, flags = "", timeout: nil, edition: :current, unicode_version: nil)`, `CorvusRegexEcma262.compile` | Compiles a pattern as `new RegExp(pattern, flags)` does. `timeout:` is the match timeout in seconds (0 for none; nil for the default). `edition:` and `unicode_version:` are below. |
 | `CorvusRegexEcma262.default_timeout`, `.default_timeout=` | The timeout of every pattern compiled without one: nil (no limit) unless set. |
-| `Regex.valid?(pattern, flags = "")` | Whether a pattern is valid, without compiling it. |
+| `Regex.valid?(pattern, flags = "", edition: :current, unicode_version: nil)` | Whether a pattern is valid, without compiling it. |
 | `match?(string, pos = 0, timeout: nil)` | `RegExp.prototype.test` with `lastIndex` at `pos` (at `pos` alone with `y`). |
 | `match(string, pos = 0, timeout: nil)` | The first match at or after `pos`, as `exec` finds it: a `Match`, or `nil`; with a block, the block's result. |
 | `each_match(string)` | A global search as `matchAll` makes it: yields each `Match`, or returns an `Enumerator`. |
@@ -67,7 +67,8 @@ CorvusRegexEcma262.compile('\s*(;)\s*').split("a ; b;c")  # => ["a", ";", "b", "
 | `replace(string, replacement)`, `replace(string) { \|m\| ... }` | `String.prototype.replace`: the first match, or every match with `g`. |
 | `replace_all(string, replacement)` | `String.prototype.replaceAll`: every match. |
 | `split(string, limit = nil)` | `String.prototype.split`: an Array of Strings, `nil` for a group that did not take part. |
-| `source`, `flags`, `timeout`, `group_count`, `names` | What the pattern is. |
+| `source`, `flags`, `timeout`, `edition`, `unicode_version`, `group_count`, `names` | What the pattern is. |
+| `UNICODE_VERSIONS`, `DEFAULT_UNICODE_VERSION`, `LATEST_UNICODE_VERSION` | The versions of Unicode the gem carries, `[13, 17, 18]`, the default (17) and the latest (18). |
 
 A `Match` is read as a `MatchData` is: `m[g]` (a number, a name or a Symbol), `captures`, `named_captures`, `to_a`,
 `values_at`, `pre_match`, `post_match`, `begin(g)`, `end(g)` and `offset(g)` (nil for a group that did not take part),
@@ -88,6 +89,22 @@ for every pattern compiled after it `CorvusRegexEcma262.default_timeout = 1.0`. 
 of its matches the timeout and raises `MatchLimitError` at it (a global search ends there); `match?` and `match` take a
 `timeout:` of their own in its place. Without a timeout (the default) a match has no limit of time or of memory, so a
 program that matches a pattern or a text it did not write should set one.
+
+**The edition and the version of Unicode.** Two settings, each independent of the other, are settled when a pattern is
+compiled and cost a match nothing:
+
+- `edition: :es2020` reads the pattern with the grammar of ECMAScript 2020, which JSON Schema 2020-12 names. It refuses
+  what later editions added, and nothing else: the `d` and `v` flags (`InvalidFlagsError`), modifier groups such as
+  `(?i:...)`, a group name used by two groups, and a property name or value that is not in that edition's tables, such
+  as `\p{Script=Yezidi}` (each `InvalidPatternError`). A pattern it accepts has the same answers as in today's
+  grammar. `:current`, the default, is today's grammar.
+- `unicode_version:` is the version of Unicode whose tables the pattern is read with: the members of each `\p{...}`,
+  the characters of a group name, and case folding. It is nil (the default: the version of the V8 the answers are held
+  to, 17 today), 13, 17, 18 or `:latest` (18 today). `Regex#unicode_version` gives the version it resolved to.
+
+```ruby
+CorvusRegexEcma262::Regex.new('^\p{L}+$', "u", edition: :es2020, unicode_version: 13, timeout: 1.0)
+```
 
 **Threads.** A `Regex` is frozen and may be used from any number of threads. A string cannot change while a global
 search walks it.

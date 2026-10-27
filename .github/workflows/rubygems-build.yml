@@ -2,7 +2,8 @@ name: rubygems-build
 # Builds the corvus_regex_ecma262 gems: the source gem, and native gems cross-compiled with rb-sys-dock for each
 # platform, each holding the extension for Ruby 3.3, 3.4 and 4.0. Each native gem is then installed and tested on its
 # own platform, with the oldest and newest of those Rubies, and the ECMA-262 test data (pinned to a commit) runs
-# through it. The test also checks that the gem is the only native gem
+# through it (on x86_64 Linux with Ruby 4.0, also for Unicode 13 and 18 and for the grammar of ECMAScript 2020, as the
+# data's overlays write it). The test also checks that the gem is the only native gem
 # RubyGems would offer that Ruby, and on Linux installs it by name from an index of all the gems. The gems are
 # uploaded as artifacts named gem-*. Called by ci.yml (every change) and rubygems-publish.yml (a release), so a release pushes
 # exactly what was built and tested here.
@@ -127,7 +128,7 @@ jobs:
       matrix:
         include:
           - { platform: x86_64-linux-gnu, os: ubuntu-latest, ruby: '3.3' }
-          - { platform: x86_64-linux-gnu, os: ubuntu-latest, ruby: '4.0' }
+          - { platform: x86_64-linux-gnu, os: ubuntu-latest, ruby: '4.0', overlays: true }
           - { platform: aarch64-linux-gnu, os: ubuntu-24.04-arm, ruby: '3.3' }
           - { platform: aarch64-linux-gnu, os: ubuntu-24.04-arm, ruby: '4.0' }
           # The musl gems are tested in the official Alpine images, run with docker (JavaScript actions do not run in
@@ -157,7 +158,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: corvus-dotnet/ecma262-regex-test-data
-          ref: cff0860b7ebc5eb9c801eb9f8cec9d5398688ff2
+          ref: 1b4c4353c4fa3fc3e318db32ef0261391519b9a5
           path: ecma262-regex-test-data
           persist-credentials: false
       - name: Setup Ruby
@@ -216,3 +217,30 @@ jobs:
           else
             sh test-gem.sh
           fi
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: ${{ matrix.overlays }}
+        with:
+          node-version: '24.22.1'
+      - name: Run the ECMA-262 test data for other versions of Unicode and for ECMAScript 2020
+        # The data as its own scripts write it for Unicode 13 and 18 (unicode.js apply) and for the grammar of
+        # ECMAScript 2020 (edition.js apply), each judged through the installed gem set to match.
+        if: ${{ matrix.overlays }}
+        run: |
+          data=ecma262-regex-test-data
+          failed=()
+          run() {
+            name=$1; shift
+            out="$RUNNER_TEMP/$name"
+            case "$1" in
+              unicode.js) node "$data/unicode.js" apply "$2" "$out" "$data/data" ;;
+              edition.js) node "$data/edition.js" apply "$out" "$2" "$data/data" ;;
+            esac
+            shift 2
+            ruby tools/dataset.rb "$out" "wrong-cases-$name.tsv" "$@" || failed+=("$name")
+          }
+          run unicode-13 unicode.js 13.0 --unicode 13
+          run unicode-18 unicode.js 18.0 --unicode 18
+          # An empty version is the data's own Unicode.
+          run es2020 edition.js "" --edition es2020
+          run es2020-unicode-13 edition.js 13.0 --edition es2020 --unicode 13
+          if [ ${#failed[@]} -gt 0 ]; then echo "::error::Wrong: ${failed[*]}"; exit 1; fi

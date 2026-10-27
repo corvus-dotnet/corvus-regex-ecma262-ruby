@@ -206,6 +206,114 @@ class TestRegex < Minitest::Test
     assert_equal ["b"], found
   end
 
+  def test_the_defaults_are_todays_grammar_and_v8s_unicode
+    re = R.compile("a")
+    assert_equal :current, re.edition
+    assert_equal 17, re.unicode_version
+    assert_equal 17, R::DEFAULT_UNICODE_VERSION
+    assert_equal 18, R::LATEST_UNICODE_VERSION
+    assert_equal [13, 17, 18], R::UNICODE_VERSIONS
+  end
+
+  def test_a_version_is_resolved_when_the_pattern_is_compiled
+    [[nil, 17], [13, 13], [17, 17], [18, 18], [:latest, 18]].each do |asked, resolved|
+      assert_equal resolved, R.compile("a", unicode_version: asked).unicode_version, asked.inspect
+    end
+    [12, 19, "18", :default, 17.0].each do |bad|
+      assert_raises(ArgumentError) { R.compile("a", unicode_version: bad) }
+      assert_raises(ArgumentError) { R.valid?("a", unicode_version: bad) }
+    end
+    assert_raises(ArgumentError) { R.compile("a", edition: :es2022) }
+    assert_raises(ArgumentError) { R.valid?("a", edition: "es2020") }
+  end
+
+  def test_each_version_has_its_own_scripts
+    [
+      ['\p{Script=Vithkuqi}', 13, false],
+      ['\p{Script=Vithkuqi}', nil, true],
+      ['\p{Script=Yezidi}', 13, true],
+      ['\p{Script=Jurchen}', nil, false],
+      ['\p{scx=Jurc}', 18, true],
+      ['\p{Script=Jurchen}', :latest, true]
+    ].each do |pattern, version, valid|
+      assert_equal valid, R.valid?(pattern, "u", unicode_version: version), "#{pattern} #{version.inspect}"
+      if valid
+        R.compile(pattern, "u", unicode_version: version)
+      else
+        assert_raises(R::InvalidPatternError) { R.compile(pattern, "u", unicode_version: version) }
+      end
+    end
+  end
+
+  def test_a_property_and_case_folding_are_the_versions
+    letter = "\u{10597}"
+    assert R.compile('^\p{Ll}$', "u").match?(letter)
+    refute R.compile('^\p{Ll}$', "u", unicode_version: 13).match?(letter)
+    assert R.compile("\u{10570}", "iu").match?(letter)
+    refute R.compile("\u{10570}", "iu", unicode_version: 13).match?(letter)
+    assert R.compile("\u{A7C0}", "i").match?("\u{A7C1}")
+    refute R.compile("\u{A7C0}", "i", unicode_version: 13).match?("\u{A7C1}")
+  end
+
+  def test_a_case_insensitive_backreference_folds_as_its_version_folds
+    [["iu", "\u{10570}\u{10597}"], ["i", "\u{A7C0}\u{A7C1}"]].each do |flags, text|
+      twice = text[0] * 2
+      ['(.)\1', '(?<=\1(.))', '(?:x|(.))+\1$'].each do |pattern|
+        [17, 18].each do |version|
+          re = R.compile(pattern, flags, unicode_version: version)
+          assert re.match?(text), "#{pattern} /#{flags} under #{version}"
+          assert re.match?(u16(text)), "#{pattern} /#{flags} over UTF-16 under #{version}"
+        end
+        re = R.compile(pattern, flags, unicode_version: 13)
+        refute re.match?(text), "#{pattern} /#{flags} under 13"
+        refute re.match?(u16(text)), "#{pattern} /#{flags} over UTF-16 under 13"
+        assert re.match?(twice), "#{pattern} /#{flags} under 13, the same letter twice"
+        refute_nil re.match(twice)
+        assert_nil re.match(text)
+      end
+    end
+  end
+
+  def test_the_grammar_of_2020_refuses_what_later_editions_added
+    [
+      ["(?i:a)", ""], ["(?-i:a)", "i"], ["(?s:.)", "u"], ["(?<a>x)|(?<a>y)", ""], ["(?<a>x)|(?<a>y)", "u"],
+      ['\p{Script=Yezidi}', "u"], ['\p{sc=Vith}', "u"], ['\p{Script_Extensions=Toto}', "u"]
+    ].each do |pattern, flags|
+      assert_raises(R::InvalidPatternError, "#{pattern} /#{flags}") do
+        R.compile(pattern, flags, edition: :es2020, unicode_version: :latest)
+      end
+      refute R.valid?(pattern, flags, edition: :es2020, unicode_version: :latest)
+      R.compile(pattern, flags, unicode_version: :latest)
+    end
+  end
+
+  def test_the_grammar_of_2020_accepts_what_it_had
+    [
+      ['\p{Script=Greek}', "u"], ['\p{L}\p{gc=Lu}\p{Lowercase}', "u"], ['\P{scx=Latn}', "iu"],
+      ['\p{Script=Yezidi}', ""], ['(?<a>x)(?<b>y)\k<a>', "u"], ["(?<=a)(?<!b)", "s"], ["(?:i)", ""]
+    ].each do |pattern, flags|
+      re = R.compile(pattern, flags, edition: :es2020, unicode_version: 13)
+      assert_equal :es2020, re.edition
+      assert_equal 13, re.unicode_version
+    end
+  end
+
+  def test_the_grammar_of_2020_has_no_d_or_v_flag
+    %w[d v dv gv].each do |flags|
+      assert_raises(R::InvalidFlagsError, flags) { R.compile("a", flags, edition: :es2020) }
+      refute R.valid?("a", flags, edition: :es2020)
+      R.compile("a", flags)
+    end
+  end
+
+  def test_the_settings_and_a_timeout_go_together
+    re = R.compile(NEVER, "u", timeout: 0.03, edition: :es2020, unicode_version: 13)
+    assert_in_delta 0.03, re.timeout, 1e-9
+    assert_equal [:es2020, 13], [re.edition, re.unicode_version]
+    assert_raises(R::MatchLimitError) { re.match?(("a" * 60) + "b") }
+    assert_equal :es2020, R::Regex.new("a", "u", edition: :es2020).edition
+  end
+
   def test_a_timeout_caps_the_memory_of_a_match
     e = assert_raises(R::MatchLimitError) { R.compile("(?:a?){2147483647}", timeout: 3600).match?("") }
     assert_match(/memory/, e.message)
