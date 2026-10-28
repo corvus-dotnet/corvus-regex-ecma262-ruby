@@ -26,6 +26,16 @@ end
 module CorvusRegexEcma262
   UTF16LE = Encoding::UTF_16LE
 
+  # The versions of Unicode the gem carries, each a set of tables a pattern can be read with (unicode_version:).
+  UNICODE_VERSIONS = [13, 17, 18].freeze
+  # The version a pattern is read with by default: the version of the V8 the answers are held to.
+  DEFAULT_UNICODE_VERSION = Native.default_unicode_version
+  # The newest version the gem carries, which unicode_version: :latest stands for.
+  LATEST_UNICODE_VERSION = Native.latest_unicode_version
+
+  # The editions of ECMA-262 whose grammar a pattern can be read with (edition:), as the extension numbers them.
+  EDITIONS = { current: 0, es2020: 1 }.freeze
+
   # A compiled ECMA-262 regular expression, as new RegExp(pattern, flags) compiles it. It is immutable, and may be
   # used from any number of threads.
   class Regex
@@ -36,16 +46,32 @@ module CorvusRegexEcma262
     # before it is abandoned with MatchLimitError (0 for none); nil takes CorvusRegexEcma262.default_timeout, which is
     # none unless set. A timeout also caps the backtracking memory of a match; without one a match has no limit of time
     # or of memory, so give a pattern or a text from outside one.
-    def initialize(pattern, flags = "", timeout: nil)
-      @native = Native::Regex.new(CorvusRegexEcma262.utf8(pattern), flags.to_s, timeout&.to_f)
+    #
+    # edition: is the grammar the pattern is read with: :current (today's, the default) or :es2020, the grammar of
+    # ECMAScript 2020, which JSON Schema 2020-12 names. It refuses what later editions added, and nothing else: the d
+    # and v flags (InvalidFlagsError), modifier groups such as (?i:...), a group name used by two groups, and a property
+    # name or value that is not in that edition's tables (InvalidPatternError). unicode_version: is the version of
+    # Unicode whose tables the pattern is read with: nil (the default, DEFAULT_UNICODE_VERSION), 13, 17, 18 or :latest
+    # (LATEST_UNICODE_VERSION). Each is independent of the other; both are settled here, and cost a match nothing.
+    def initialize(pattern, flags = "", timeout: nil, edition: :current, unicode_version: nil)
+      @native = Native::Regex.new(CorvusRegexEcma262.utf8(pattern), flags.to_s, timeout&.to_f,
+                                  CorvusRegexEcma262.edition_code(edition),
+                                  CorvusRegexEcma262.unicode_version_code(unicode_version))
       @names = @native.names.freeze
       freeze
     end
 
-    # Whether a pattern is valid with the flags, without compiling it.
-    def self.valid?(pattern, flags = "")
-      Native::Regex.valid?(CorvusRegexEcma262.utf8(pattern), flags.to_s)
+    # Whether a pattern is valid with the flags, in the edition and the version of Unicode, without compiling it.
+    def self.valid?(pattern, flags = "", edition: :current, unicode_version: nil)
+      Native::Regex.valid?(CorvusRegexEcma262.utf8(pattern), flags.to_s, CorvusRegexEcma262.edition_code(edition),
+                           CorvusRegexEcma262.unicode_version_code(unicode_version))
     end
+
+    # The edition whose grammar the pattern was read with: :current or :es2020.
+    def edition = EDITIONS.key(@native.edition)
+
+    # The version of Unicode whose tables the pattern was read with, resolved: 13, 17 or 18.
+    def unicode_version = @native.unicode_version
 
     # The pattern as it was given, as UTF-8.
     def source = @native.source
@@ -267,8 +293,10 @@ module CorvusRegexEcma262
   end
 
   class << self
-    # Compiles a pattern: Regex.new(pattern, flags, timeout:).
-    def compile(pattern, flags = "", timeout: nil) = Regex.new(pattern, flags, timeout: timeout)
+    # Compiles a pattern: Regex.new(pattern, flags, timeout:, edition:, unicode_version:).
+    def compile(pattern, flags = "", timeout: nil, edition: :current, unicode_version: nil)
+      Regex.new(pattern, flags, timeout: timeout, edition: edition, unicode_version: unicode_version)
+    end
 
     # The timeout in seconds of every Regex made without one of its own, or nil for no limit (the default).
     def default_timeout = Native.default_timeout
@@ -280,11 +308,31 @@ module CorvusRegexEcma262
       Native.default_timeout = seconds&.to_f
     end
 
-    # Whether a pattern is valid with the flags, without compiling it.
-    def valid?(pattern, flags = "") = Regex.valid?(pattern, flags)
+    # Whether a pattern is valid with the flags, in the edition and the version of Unicode, without compiling it.
+    def valid?(pattern, flags = "", edition: :current, unicode_version: nil)
+      Regex.valid?(pattern, flags, edition: edition, unicode_version: unicode_version)
+    end
 
     # The version of the crate the extension was built with.
     def crate_version = Native.crate_version
+
+    # @api private: the extension's number for an edition.
+    def edition_code(edition)
+      EDITIONS.fetch(edition) { raise ArgumentError, "edition must be :current or :es2020" }
+    end
+
+    # @api private: the extension's number for a version of Unicode: 0 for the default, u32::MAX for the latest.
+    def unicode_version_code(version)
+      case version
+      when nil then 0
+      when :latest then 0xFFFF_FFFF
+      when Integer
+        return version if UNICODE_VERSIONS.include?(version)
+
+        raise ArgumentError, "unicode_version must be nil, 13, 17, 18 or :latest"
+      else raise ArgumentError, "unicode_version must be nil, 13, 17, 18 or :latest"
+      end
+    end
 
     # @api private
     def utf8(s)

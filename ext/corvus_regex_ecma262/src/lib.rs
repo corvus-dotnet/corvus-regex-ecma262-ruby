@@ -97,6 +97,22 @@ fn limit_of(timeout: Option<f64>) -> Option<Duration> {
     timeout.map(|t| Duration::from_secs_f64(t.max(0.0)))
 }
 
+/// The edition the wrapper passes: 0 for today's grammar, 1 for ECMAScript 2020's.
+fn edition_of(edition: u32) -> ecma::Edition {
+    if edition == 1 { ecma::Edition::Es2020 } else { ecma::Edition::Current }
+}
+
+/// The version of Unicode the wrapper passes: 0 for the default (V8's), 13, 17, 18, or u32::MAX for the latest.
+fn unicode_version_of(version: u32) -> ecma::UnicodeVersion {
+    match version {
+        13 => ecma::UnicodeVersion::V13,
+        17 => ecma::UnicodeVersion::V17,
+        18 => ecma::UnicodeVersion::V18,
+        u32::MAX => ecma::UnicodeVersion::Latest,
+        _ => ecma::UnicodeVersion::Default,
+    }
+}
+
 /// A timeout in seconds, nil for none.
 fn seconds_of(timeout: Option<Duration>) -> Option<f64> {
     timeout.map(|t| t.as_secs_f64())
@@ -216,15 +232,24 @@ impl Drop for Locked {
 }
 
 impl NativeRegex {
-    /// A pattern with the flags, and a timeout in seconds (0 for none), or nil for the default timeout.
-    fn new(ruby: &Ruby, pattern: RString, flags: RString, timeout: Option<f64>) -> Result<NativeRegex, Error> {
+    /// A pattern with the flags, a timeout in seconds (0 for none) or nil for the default timeout, and the edition and
+    /// the version of Unicode (see edition_of and unicode_version_of).
+    fn new(
+        ruby: &Ruby,
+        pattern: RString,
+        flags: RString,
+        timeout: Option<f64>,
+        edition: u32,
+        unicode_version: u32,
+    ) -> Result<NativeRegex, Error> {
         let pattern = pattern.to_string()?;
         let flags = flags.to_string()?;
-        let inner = match limit_of(timeout) {
-            None => ecma::Regex::new(&pattern, &flags),
-            Some(t) => ecma::Flags::parse(&flags).and_then(|f| ecma::Regex::with_timeout(&pattern, f, Some(t))),
+        let mut builder = ecma::RegexBuilder::new(&pattern);
+        builder.flags(&flags).edition(edition_of(edition)).unicode_version(unicode_version_of(unicode_version));
+        if let Some(t) = limit_of(timeout) {
+            builder.match_timeout(Some(t));
         }
-        .map_err(|e| compile_error(ruby, e))?;
+        let inner = builder.build().map_err(|e| compile_error(ruby, e))?;
         let written = format!("{}", inner.flags());
         let names = inner.group_names().map(str::to_owned).collect();
         Ok(NativeRegex {
@@ -235,8 +260,21 @@ impl NativeRegex {
         })
     }
 
-    fn is_valid(pattern: RString, flags: RString) -> Result<bool, Error> {
-        Ok(ecma::Regex::is_valid(&pattern.to_string()?, &flags.to_string()?))
+    fn is_valid(pattern: RString, flags: RString, edition: u32, unicode_version: u32) -> Result<bool, Error> {
+        let pattern = pattern.to_string()?;
+        Ok(ecma::Flags::parse(&flags.to_string()?).is_ok_and(|f| {
+            ecma::Regex::is_valid_with(&pattern, f, edition_of(edition), unicode_version_of(unicode_version))
+        }))
+    }
+
+    /// 0 for today's grammar, 1 for ECMAScript 2020's.
+    fn edition(&self) -> u32 {
+        u32::from(self.inner.edition() == ecma::Edition::Es2020)
+    }
+
+    /// The version of Unicode the pattern was read with, resolved: 13, 17 or 18.
+    fn unicode_version(&self) -> u32 {
+        self.inner.unicode_version().major()
     }
 
     fn source(&self) -> String {
@@ -406,8 +444,13 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
         function!(|t: Option<f64>| ecma::set_default_match_timeout(limit_of(t)), 1),
     )?;
     native.define_singleton_method("default_timeout", function!(|| seconds_of(ecma::default_match_timeout()), 0))?;
-    regex.define_singleton_method("new", function!(NativeRegex::new, 3))?;
-    regex.define_singleton_method("valid?", function!(NativeRegex::is_valid, 2))?;
+    native
+        .define_singleton_method("default_unicode_version", function!(|| ecma::UnicodeVersion::Default.major(), 0))?;
+    native.define_singleton_method("latest_unicode_version", function!(|| ecma::UnicodeVersion::Latest.major(), 0))?;
+    regex.define_singleton_method("new", function!(NativeRegex::new, 5))?;
+    regex.define_singleton_method("valid?", function!(NativeRegex::is_valid, 4))?;
+    regex.define_method("edition", method!(NativeRegex::edition, 0))?;
+    regex.define_method("unicode_version", method!(NativeRegex::unicode_version, 0))?;
     regex.define_method("source", method!(NativeRegex::source, 0))?;
     regex.define_method("flags", method!(NativeRegex::flags, 0))?;
     regex.define_method("timeout", method!(NativeRegex::timeout, 0))?;

@@ -5,7 +5,7 @@
 # judges it:
 #
 #   ruby -Ilib tools/dataset.rb <data directory> <wrong-cases output file> [--files <glob>] [--workers N]
-#                               [--compliance <file>]
+#                               [--compliance <file>] [--edition current|es2020] [--unicode 13|17|18|latest]
 #
 # Each record is asked about under each grammar V8 found it valid in: the record's flags with u added (the unicode
 # answers), the record's flags alone (the legacy answers) and, in the file that has them, the flags with v added (the
@@ -22,6 +22,10 @@
 # g or y, the lastIndex after are V8's; one answer over the UTF-16LE string and, when the text holds no lone surrogate and
 # lastIndex is not between the halves of a pair, one over the UTF-8 string with positions in bytes.
 #
+# --edition and --unicode compile every pattern with that edition and version of Unicode, for the data as its own scripts
+# write it for them (edition.js apply and unicode.js apply in the data repository). Under es2020 a refusal of the d or v
+# flag is a refusal of the pattern, as the data's overlay counts it.
+#
 # With --compliance <file>, the engine's compliance object is written to the file, as the benchmark page reads it
 # (docs/implementing-a-source.md in corvus-regex-ecma262-benchmarks): the counts, this runner and the calls it makes in
 # each encoding, and what it leaves out, which for this gem is nothing.
@@ -37,6 +41,8 @@ require "corvus_regex_ecma262"
 
 module Dataset
   LIMIT = 2.0
+  # The edition and the version of Unicode every pattern is compiled with (--edition, --unicode).
+  SETTINGS = { edition: :current, unicode_version: nil }
   REPLACEMENT = "<$&|$1|$2|$10|$<a>|$$|$`|$'>"
   # The first code point of each block a line's lone surrogates may be read as.
   BLOCKS = (0xF0000..0xFF000).step(0x800).to_a + (0x100000..0x10F000).step(0x800).to_a
@@ -128,9 +134,11 @@ module Dataset
   end
 
   def compile(pattern, flags)
-    [R::Regex.new(utf8_lossy(pattern), flags), nil, false]
+    [R::Regex.new(utf8_lossy(pattern), flags, **SETTINGS), nil, false]
   rescue R::InvalidPatternError => e
     [nil, "PARSE: #{e.message}", false]
+  rescue R::InvalidFlagsError => e
+    SETTINGS[:edition] == :es2020 ? [nil, "FLAGS: #{e.message}", false] : [nil, "ERROR: #{e.message}", true]
   rescue R::PatternTooLargeError => e
     [nil, "TOO-LARGE: #{e.message}", false]
   rescue R::Error => e
@@ -516,7 +524,7 @@ module Dataset
   def main(argv)
     data, wrong_path, *rest = argv
     abort "usage: ruby -Ilib tools/dataset.rb <data directory> <wrong-cases file> [--files glob] [--workers N] " \
-          "[--compliance file]" unless wrong_path
+          "[--compliance file] [--edition current|es2020] [--unicode 13|17|18|latest]" unless wrong_path
     files_glob = "*.jsonl"
     workers = 4
     compliance = nil
@@ -525,6 +533,8 @@ module Dataset
       when "--files" then files_glob = value
       when "--workers" then workers = Integer(value)
       when "--compliance" then compliance = value
+      when "--edition" then SETTINGS[:edition] = value.to_sym
+      when "--unicode" then SETTINGS[:unicode_version] = value == "latest" ? :latest : Integer(value)
       else abort "unknown option #{flag}"
       end
     end
