@@ -152,6 +152,7 @@ jobs:
         with:
           persist-credentials: false
           sparse-checkout: |
+            docs
             test
             tools
       - name: Checkout the ECMA-262 test data
