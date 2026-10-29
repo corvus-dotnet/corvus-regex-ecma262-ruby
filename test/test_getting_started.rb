@@ -54,7 +54,10 @@ class TestGettingStarted < Minitest::Test
           line
         end
       end
-      assert_operator checks, :>, 0, "the example at docs/getting-started.md:#{first} checks nothing"
+      # Every example checks something, but for Setup's, which is only the require.
+      unless lines.all? { |l| l.strip.empty? || l.start_with?("require ") }
+        assert_operator checks, :>, 0, "the example at docs/getting-started.md:#{first} checks nothing"
+      end
       Example.new(self).instance_eval(source.join("\n"), PAGE, first)
     end
   end
