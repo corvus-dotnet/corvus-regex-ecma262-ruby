@@ -152,6 +152,7 @@ jobs:
         with:
           persist-credentials: false
           sparse-checkout: |
+            docs
             test
             tools
       - name: Checkout the ECMA-262 test data
@@ -208,6 +209,8 @@ jobs:
             expected = ENV["GEM_PLATFORM"]
             abort "The #{platform} gem was installed, not the #{expected} one." unless platform == expected'
           ruby test/test_regex.rb
+          # The examples of the getting-started page the documentation site publishes, through the installed gem.
+          ruby test/test_getting_started.rb
           # The ECMA-262 test data through the installed gem: no wrong answer, refusal, acceptance of an invalid
           # pattern or match at its limit.
           ruby tools/dataset.rb "$root/ecma262-regex-test-data/data" wrong-cases.tsv
