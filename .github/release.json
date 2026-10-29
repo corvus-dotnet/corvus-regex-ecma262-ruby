@@ -9,11 +9,7 @@
         "corvus_regex_ecma262.gemspec",
         "Rakefile",
         "ext/",
-        "lib/",
-        "docs/getting-started.md",
-        "docs/api.md",
-        "docs/design.md",
-        "docs/contributing.md"
+        "lib/"
       ],
       "stamp": [
         {
