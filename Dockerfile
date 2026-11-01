@@ -9,9 +9,9 @@
 # at depth 1 inside the container unless its data/ directory is mounted at /data. JOB=short, SECONDS_EACH, PASSES,
 # CORES, SETTLE and RUN_URL pass through (see tools/bench/run.sh). The central benchmark site runs this image each
 # night; .github/workflows/harness-image.yml builds, smoke-runs and publishes it.
-FROM node:24.22.1-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS node
+FROM node:24.22.1-bookworm-slim@sha256:be8204d4bd327363357f532187b752ff62759c31bedf98e9e18fc08c9cbd605c AS node
 
-FROM ruby:3.4-bookworm@sha256:9d1b22f2341dc96a1cd2f4f4495a31c19495b42ed243f1338e60075210025fd4 AS extension
+FROM ruby:3.4-bookworm@sha256:8853c6f24866429483fce3a869e61a6a13916beb2720468c6d95c78f41c0f564 AS extension
 RUN apt-get update && apt-get install -y --no-install-recommends libclang-dev clang && rm -rf /var/lib/apt/lists/* \
     && case "$(uname -m)" in x86_64) arch=x86_64 sum=5be191e8c70a5007074254cb74d78dbfdd25cd5a61c27de7b8e5410122ec24f4 ;; aarch64) arch=aarch64 sum=a9c168dbea81a84671c6b7a5c1795cb0eb699020110d107ddfca427bd797e697 ;; \
         *) echo "no rustup-init is pinned for $(uname -m)"; exit 1 ;; esac \
@@ -23,7 +23,7 @@ WORKDIR /src
 COPY . .
 RUN rustup toolchain install 1.98.0 --profile minimal && rustup default 1.98.0 && bundle install --quiet && bundle exec rake compile
 
-FROM ruby:3.4-slim-bookworm@sha256:549e18ddab0acedc09a63be26cc3bdb6c05988bf3ebccfd34fbc90869395097c
+FROM ruby:3.4-slim-bookworm@sha256:a0636a941ef86063f17b343f6c96f271f8eeedd76febf035bb6d57bc5024682b
 RUN apt-get update && apt-get install -y --no-install-recommends git util-linux ca-certificates python3 \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
